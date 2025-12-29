@@ -443,6 +443,40 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     }
 
 
+# ==================== AUTH ALIASES (without /api prefix) ====================
+# These are aliases to support frontend calls without the /api prefix
+
+@app.post("/auth/send-otp")
+async def send_otp_alias(email_req: EmailRequest):
+    """Alias for /api/auth/send-otp"""
+    return await send_otp(email_req)
+
+@app.post("/auth/verify-otp")
+async def verify_otp_alias(otp_data: OTPVerify):
+    """Alias for /api/auth/verify-otp"""
+    return await verify_otp(otp_data)
+
+@app.post("/auth/register", response_model=TokenResponse)
+async def register_alias(user_data: UserRegister):
+    """Alias for /api/auth/register"""
+    return await register(user_data)
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login_alias(credentials: UserLogin):
+    """Alias for /api/auth/login"""
+    return await login(credentials)
+
+@app.post("/auth/token", response_model=TokenResponse)
+async def token_alias(credentials: UserLogin):
+    """Alias for /api/auth/login (frontend uses /auth/token)"""
+    return await login(credentials)
+
+@app.get("/auth/me", response_model=UserResponse)
+async def get_me_alias(current_user: dict = Depends(get_current_user)):
+    """Alias for /api/auth/me"""
+    return await get_me(current_user)
+
+
 # ==================== SCRAPING MODELS ====================
 
 class ScrapeRequest(BaseModel):

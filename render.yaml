@@ -1,0 +1,40 @@
+services:
+  # Backend API (Python FastAPI)
+  - type: web
+    name: leadmaps-backend
+    env: python
+    buildCommand: chmod +x render-build.sh && ./render-build.sh
+    startCommand: python server.py
+    plan: free
+    branch: main
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: RENDER
+        value: "true"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+
+  # Frontend (Static Site)
+  - type: web
+    name: leadmaps-frontend
+    env: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    branch: main
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=31536000
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

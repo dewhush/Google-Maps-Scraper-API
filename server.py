@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
@@ -68,12 +69,16 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# --- ADVANCED SECURITY MIDDLEWARE ---
 @app.middleware("http")
 async def secure_middleware(request: Request, call_next):
-    # 1. Logging and Debugging
-    print(f"📡 [API REQUEST]: {request.method} {request.url.path}")
+    client_ip = request.client.host if request.client else "unknown"
     
+    # 1. Block large request bodies (prevent DoS) - 1MB limit for auth/api
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 1 * 1024 * 1024:
+        log_security_event("DOS_ATTEMPT", f"Large payload: {content_length} bytes", client_ip)
+        return Response(status_code=413, content="Payload too large")
+
     # 2. Block malicious bot scanners & exploit attempts
     path = request.url.path.lower()
     query = str(request.url.query).lower()
@@ -81,22 +86,24 @@ async def secure_middleware(request: Request, call_next):
     blocked_patterns = [
         ".php", ".env", ".git", "xmlrpc", "wp-admin", 
         "xdebug", "shell", "eval", "config", "backup",
-        "mysql", "setup", ".cgi", ".sh", ".sql"
+        "mysql", "setup", ".cgi", ".sh", ".sql", 
+        "node_modules", ".zip", ".rar", ".exe", ".bak"
     ]
     
     if any(pattern in path or pattern in query for pattern in blocked_patterns):
-        print(f"🛑 [SECURITY BLOCK]: Attempted access to {path}")
-        return Response(status_code=403, content="Security Violation: Request Blocked")
+        log_security_event("BOT_SCAN", f"Attempted access to {path}", client_ip)
+        print(f"🛑 [SECURITY BLOCK]: {client_ip} tried {path}")
+        return Response(status_code=403, content="Access Denied: Security Violation")
         
     # 3. Process the request
     response = await call_next(request)
-    print(f"✅ [API RESPONSE]: {response.status_code}")
     
     # 4. Add High-End Security Headers
     response.headers["X-Frame-Options"] = "DENY" 
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none';"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none';"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     
     return response
@@ -109,6 +116,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Gzip compression for large JSON responses (like contacts list)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Global state for tracking scraping progress
 scraping_state = {
@@ -159,6 +169,23 @@ def save_otp_storage(data: dict):
             json.dump(serializable, f, indent=2)
     except Exception as e:
         print(f"Error saving OTP storage: {e}")
+
+# Security Storage
+SECURITY_LOG_FILE = "security_events.json"
+
+def log_security_event(event_type: str, detail: str, ip: str = "Unknown"):
+    """Log a security event to a JSON file for auditing"""
+    try:
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "event_type": event_type,
+            "detail": detail,
+            "ip": ip
+        }
+        with open(SECURITY_LOG_FILE, "a") as f:
+            f.write(json.dumps(event) + "\n")
+    except Exception as e:
+        print(f"Failed to log security event: {e}")
 
 # Load existing OTPs on startup
 otp_storage = load_otp_storage()
@@ -580,7 +607,7 @@ async def forgot_password(request: Request, request_data: ForgotPasswordRequest)
     if not user_exists:
         # Return 200 OK to prevent user enumeration
         # Delay slightly to mimic processing time
-        time.sleep(1) 
+        await asyncio.sleep(1) 
         return {"message": "If this email is registered, a reset code has been sent."}
 
     # Generate OTP
@@ -882,53 +909,55 @@ async def run_scraper(
             progress=50
         )
         
-        # Scrape details phase
-        for i, place_url in enumerate(all_place_urls):
+        # Scrape details phase - Concurrent Optimization
+        semaphore = asyncio.Semaphore(3) # Limit to 3 concurrent details pages
+        
+        async def scrape_and_save(place_url, index):
             if not scraping_state["is_running"]:
-                break
+                return
             
-            progress = 50 + int((i / max(total_places, 1)) * 45)
-            update_state(
-                status=f"Scraping {i+1}/{total_places}: {place_url.get('name', 'Unknown')[:30]}...",
-                progress=progress
-            )
-            
-            try:
-                result = await active_crawler.scrape_place_details(place_url)
-                if result:
-                    new_contact = {
-                        "user_id": user_id,
-                        "business_name": result.get("name", "Unknown"),
-                        "phone": result.get("phone", ""),
-                        "address": result.get("address", ""),
-                        "rating": float(result.get("rating", 0) or 0),
-                        "reviews": int(result.get("reviews", 0) or 0),
-                        "category": result.get("category", ""),
-                        "verified": False,
-                        "website": result.get("website", ""),
-                        "hours": result.get("hours", ""),
-                        "description": "",
-                        "raw_data": result
-                    }
-                    
-                    save_resp = supabase.table("contacts").insert(new_contact).execute()
-                    if save_resp.data:
-                        found_contact_ids.append(save_resp.data[0]["id"])
+            async with semaphore:
+                try:
+                    result = await active_crawler.scrape_place_details(place_url)
+                    if result:
+                        new_contact = {
+                            "user_id": user_id,
+                            "business_name": result.get("name", "Unknown"),
+                            "phone": result.get("phone", ""),
+                            "address": result.get("address", ""),
+                            "rating": float((result.get("rating") or "0").replace(",", ".")) if isinstance(result.get("rating"), str) else float(result.get("rating", 0) or 0),
+                            "reviews": int(result.get("reviews", 0) or 0),
+                            "category": result.get("category", ""),
+                            "verified": False,
+                            "website": result.get("website", ""),
+                            "hours": result.get("hours", ""),
+                            "description": "",
+                            "raw_data": result
+                        }
                         
-                        # 1. Update live count based ONLY on current session
-                        update_state(results_count=len(found_contact_ids))
-                        
-                        # 2. Update history record incrementally so frontend can see results via history_id
-                        if history_id:
-                            supabase.table("scrape_history").update({
-                                "results_count": len(found_contact_ids),
-                                "leads": found_contact_ids
-                            }).eq("id", history_id).execute()
-                    
-            except Exception as e:
-                print(f"Error scraping/saving {place_url}: {e}")
-            
-            await asyncio.sleep(1)
+                        save_resp = supabase.table("contacts").insert(new_contact).execute()
+                        if save_resp.data:
+                            contact_id = save_resp.data[0]["id"]
+                            found_contact_ids.append(contact_id)
+                            
+                            # 1. Update live count
+                            update_state(results_count=len(found_contact_ids))
+                            
+                            # 2. Update status text
+                            update_state(status=f"Scraped {len(found_contact_ids)}/{total_places}: {result.get('name', 'Unknown')[:20]}...")
+                            
+                            # 3. Update history (Every 5 results to save DB overhead)
+                            if history_id and len(found_contact_ids) % 5 == 0:
+                                supabase.table("scrape_history").update({
+                                    "results_count": len(found_contact_ids),
+                                    "leads": found_contact_ids
+                                }).eq("id", history_id).execute()
+                except Exception as e:
+                    print(f"Error scraping {place_url.get('name', 'Unknown')}: {e}")
+
+        # Run detail scrapers concurrently
+        tasks = [scrape_and_save(url, i) for i, url in enumerate(all_place_urls)]
+        await asyncio.gather(*tasks)
         
         # 1. Update History Record (Finally)
         if history_id:

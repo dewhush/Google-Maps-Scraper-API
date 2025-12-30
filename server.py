@@ -3,9 +3,9 @@ LeadMaps FastAPI Backend Server
 Provides REST API for Google Maps scraping and user authentication
 """
 
+import asyncio
 import json
 import os
-import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -38,9 +38,8 @@ print("=" * 60)
 
 # Import Supabase Client
 from database import supabase
-from main import GoogleMapsCrawler
-# import models - No longer needed
-# from sqlalchemy.orm import Session
+# Use async Playwright scraper instead of Selenium
+from scraper_async import AsyncGoogleMapsCrawler
 
 # Password hashing (using sha256_crypt for better Windows compatibility)
 pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
@@ -126,13 +125,8 @@ otp_storage = load_otp_storage()
 # Email Configuration (Resend SDK)
 resend.api_key = os.getenv("RESEND_API_KEY") or os.getenv("MAIL_PASSWORD", "re_gigGS3mx_CX8pyx9utdRahVhVeFtJhGXn")
 
-# Lock for thread-safe state updates
-
-# Lock for thread-safe state updates
-state_lock = threading.Lock()
-
-# Global crawler instance
-active_crawler: Optional[GoogleMapsCrawler] = None
+# Global crawler instance (async Playwright)
+active_crawler: Optional[AsyncGoogleMapsCrawler] = None
 
 
 # ==================== AUTH MODELS ====================
@@ -735,15 +729,14 @@ class StatusResponse(BaseModel):
 
 
 def update_state(**kwargs):
-    """Thread-safe state update"""
-    with state_lock:
-        for key, value in kwargs.items():
-            if key in scraping_state:
-                scraping_state[key] = value
+    """Update scraping state (async-safe since we're single-threaded in asyncio)"""
+    for key, value in kwargs.items():
+        if key in scraping_state:
+            scraping_state[key] = value
 
 
-def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
-    """Background task to run the scraper"""
+async def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
+    """Async background task to run the Playwright scraper"""
     global active_crawler
     
     try:
@@ -757,11 +750,13 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
             error=None
         )
         
-        active_crawler = GoogleMapsCrawler(headless=headless, output_file="debug_1.json")
-        active_crawler.setup_driver()
+        # Use async Playwright scraper
+        active_crawler = AsyncGoogleMapsCrawler(headless=headless, output_file="debug_1.json")
+        await active_crawler.setup_browser()
         
         update_state(status="Browser ready, starting search...", progress=10)
         
+        # Build search queries
         if query:
             search_queries = [query]
             if "jakarta" in query.lower():
@@ -782,6 +777,7 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
         all_place_urls = []
         total_queries = len(search_queries)
         
+        # Search phase
         for i, search_query in enumerate(search_queries):
             if not scraping_state["is_running"]:
                 update_state(status="Scraping stopped by user")
@@ -794,13 +790,14 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
                 progress=progress
             )
             
-            place_urls = active_crawler.search_places(search_query, max_results=max_results)
+            # Async search
+            place_urls = await active_crawler.search_places(search_query, max_results=max_results)
             
             for place_url in place_urls:
-                if place_url not in all_place_urls:
+                if place_url["url"] not in [p["url"] for p in all_place_urls]:
                     all_place_urls.append(place_url)
             
-            time.sleep(2)
+            await asyncio.sleep(2)
         
         total_places = len(all_place_urls)
         update_state(
@@ -809,7 +806,7 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
             progress=50
         )
         
-        # Scrape Details and Save to DB
+        # Scrape details phase
         for i, place_url in enumerate(all_place_urls):
             if not scraping_state["is_running"]:
                 update_state(status="Scraping stopped by user")
@@ -819,43 +816,42 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
             update_state(
                 status=f"Scraping {i+1}/{total_places}: {place_url.get('name', 'Unknown')[:30]}...",
                 progress=progress,
-                results_count=i # Approximate
+                results_count=len(active_crawler.results)
             )
             
             try:
-                active_crawler.scrape_place_details(place_url)
+                # Async scrape
+                result = await active_crawler.scrape_place_details(place_url)
                 
-                # Get the last scraped item
-                if active_crawler.results:
-                    item = active_crawler.results[-1]
-                    
-                    # Save to Database via API
+                if result:
+                    # Save to Database
                     new_contact = {
                         "user_id": user_id,
-                        "business_name": item.get("name", "Unknown"),
-                        "phone": item.get("phone", ""),
-                        "address": item.get("address", ""),
-                        "rating": float(item.get("rating", 0) or 0),
-                        "reviews": int(item.get("reviews", 0) or 0),
-                        "category": item.get("category", ""),
-                        "verified": bool(item.get("verified", False)),
-                        "website": item.get("website", ""),
-                        "hours": item.get("hours", ""),
-                        "description": item.get("description", ""),
-                        "raw_data": item # Store full JSON
+                        "business_name": result.get("name", "Unknown"),
+                        "phone": result.get("phone", ""),
+                        "address": result.get("address", ""),
+                        "rating": float(result.get("rating", 0) or 0),
+                        "reviews": int(result.get("reviews", 0) or 0),
+                        "category": result.get("category", ""),
+                        "verified": False,
+                        "website": result.get("website", ""),
+                        "hours": result.get("hours", ""),
+                        "description": "",
+                        "lat": result.get("lat"),
+                        "lng": result.get("lng"),
+                        "raw_data": result
                     }
                     
-                    # Insert directly
                     supabase.table("contacts").insert(new_contact).execute()
                     
-                    # Update state with true DB count
+                    # Update count
                     count_resp = supabase.table("contacts").select("*", count="exact", head=True).eq("user_id", user_id).execute()
-                    update_state(results_count=count_resp.count)
+                    update_state(results_count=count_resp.count or 0)
                     
             except Exception as e:
                 print(f"Error scraping/saving {place_url}: {e}")
             
-            time.sleep(1)
+            await asyncio.sleep(1)
         
         update_state(
             is_running=False,
@@ -864,6 +860,7 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
         )
         
     except Exception as e:
+        print(f"Scraper error: {e}")
         update_state(
             is_running=False,
             status="Error occurred",
@@ -872,7 +869,7 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
     finally:
         if active_crawler:
             try:
-                active_crawler.close()
+                await active_crawler.close()
             except:
                 pass
             active_crawler = None
@@ -895,7 +892,6 @@ async def root():
 @app.post("/api/scrape", response_model=ScrapeResponse)
 async def start_scraping(
     request: ScrapeRequest, 
-    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
     """Start a new scraping job (protected)"""
@@ -903,12 +899,14 @@ async def start_scraping(
     if scraping_state["is_running"]:
         raise HTTPException(status_code=409, detail="A scraping job is already running")
     
-    background_tasks.add_task(
-        run_scraper,
-        request.query,
-        request.max_results,
-        request.headless,
-        current_user["id"]
+    # Use asyncio.create_task for async background execution
+    asyncio.create_task(
+        run_scraper(
+            request.query,
+            request.max_results,
+            request.headless,
+            current_user["id"]
+        )
     )
     
     return {
@@ -1008,8 +1006,8 @@ async def contacts_compat(current_user: dict = Depends(get_current_user)):
     return await get_contacts(current_user)
 
 @app.post("/scrape", response_model=ScrapeResponse)
-async def scrape_compat(request: ScrapeRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
-    return await start_scraping(request, background_tasks, current_user)
+async def scrape_compat(request: ScrapeRequest, current_user: dict = Depends(get_current_user)):
+    return await start_scraping(request, current_user)
 
 @app.get("/scrape/status", response_model=StatusResponse)
 async def scrape_status_compat(current_user: dict = Depends(get_current_user)):

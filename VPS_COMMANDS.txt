@@ -1,0 +1,12 @@
+# COMMANDS TO RUN ON VPS AFTER CONNECTING:
+
+cd ~/Back-End-Lead-Maps
+git pull origin main
+source venv/bin/activate
+pip install playwright
+playwright install chromium
+playwright install-deps chromium
+sudo systemctl restart leadmaps
+
+# To check logs:
+journalctl -u leadmaps -f

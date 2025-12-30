@@ -19,9 +19,10 @@ class AsyncGoogleMapsCrawler:
     Compatible with FastAPI background tasks.
     """
     
-    def __init__(self, headless: bool = True, output_file: str = "data.json"):
+    def __init__(self, headless: bool = True, output_file: str = "data.json", config: Dict[str, Any] = None):
         self.headless = headless
         self.output_file = output_file
+        self.config = config or {}
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
@@ -290,19 +291,32 @@ class AsyncGoogleMapsCrawler:
             except:
                 pass
             
-            # Clean phone number
-            has_phone = bool(place_data["phone"])
+            # 1. Check Filters
+            phone_req = self.config.get("phone_required", True)
+            web_req = self.config.get("website_required", False)
             
+            has_phone = bool(place_data["phone"])
+            has_web = bool(place_data["website"])
+            
+            if phone_req and not has_phone:
+                print(f"[SKIP] No Phone: {place_data['name']}")
+                return None
+                
+            if web_req and not has_web:
+                print(f"[SKIP] No Website: {place_data['name']}")
+                return None
+
+            # 2. Clean Phone
             if has_phone:
                 place_data["phone"] = self._clean_phone_number(place_data["phone"])
-                # Re-check after cleaning (might be invalid length)
-                if place_data["phone"]:
-                    print(f"[OK] {place_data['name']} | Phone: {place_data['phone']}")
-                    self.results.append(place_data)
-                    return place_data
+                # If cleaning failed but phone was required, skip
+                if not place_data["phone"] and phone_req:
+                    print(f"[SKIP] Invalid Phone: {place_data['name']}")
+                    return None
             
-            print(f"[SKIP] No Phone: {place_data['name']}")
-            return None
+            print(f"[OK] {place_data['name']} | Phone: {place_data['phone']}")
+            self.results.append(place_data)
+            return place_data
             
         except Exception as e:
             print(f"[!] Error scraping {place_url.get('url', 'unknown')}: {str(e)}")
@@ -310,23 +324,30 @@ class AsyncGoogleMapsCrawler:
     
     
     def _clean_phone_number(self, phone: str) -> str:
-        """Clean and standardize phone number to Indonesian format"""
+        """Clean and standardize phone number based on country code"""
         if not phone:
             return ""
         
         # Remove non-digit characters except plus
         cleaned = re.sub(r'[^\d\+]', '', phone)
+        country = self.config.get("country_code", "ID").upper()
         
-        # Standardize Indonesian numbers
-        if cleaned.startswith('0'):
-            cleaned = '62' + cleaned[1:]
-        elif cleaned.startswith('8') and not cleaned.startswith('+'):
-            cleaned = '62' + cleaned
-        elif cleaned.startswith('+62'):
-            cleaned = cleaned[1:]  # Remove the plus
+        if country == "ID":
+            # Standardize Indonesian numbers
+            if cleaned.startswith('0'):
+                cleaned = '62' + cleaned[1:]
+            elif cleaned.startswith('8') and not cleaned.startswith('+'):
+                cleaned = '62' + cleaned
+            elif cleaned.startswith('+62'):
+                cleaned = cleaned[1:]  # Remove the plus
+        elif country == "US":
+            # Standardize US numbers
+            cleaned = re.sub(r'^(\+1|1)', '', cleaned)
+            if len(cleaned) == 10:
+                cleaned = '1' + cleaned
         
-        # Validate length
-        if len(cleaned) < 10 or len(cleaned) > 15:
+        # General validation: length should be between 7 and 15
+        if len(cleaned) < 7 or len(cleaned) > 15:
             return ""
         
         return cleaned

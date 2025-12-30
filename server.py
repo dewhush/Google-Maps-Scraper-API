@@ -690,6 +690,10 @@ class ScrapeRequest(BaseModel):
     query: str = "coffee shop jakarta"
     max_results: int = 20
     headless: bool = True
+    phone_required: bool = True
+    website_required: bool = False
+    use_sub_areas: bool = False
+    country_code: str = "ID"
 
 
 class ScrapeResponse(BaseModel):
@@ -757,11 +761,26 @@ def update_state(**kwargs):
             scraping_state[key] = value
 
 
-async def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
+async def run_scraper(
+    query: str, 
+    max_results: int, 
+    headless: bool, 
+    user_id: int,
+    phone_required: bool = True,
+    website_required: bool = False,
+    use_sub_areas: bool = False,
+    country_code: str = "ID"
+):
     """Async background task to run the Playwright scraper"""
     global active_crawler
     history_id = None
     found_contact_ids = []
+    
+    config = {
+        "phone_required": phone_required,
+        "website_required": website_required,
+        "country_code": country_code
+    }
     
     try:
         # 1. Create History Record (Initially)
@@ -786,21 +805,31 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
         )
         
         # Use async Playwright scraper
-        active_crawler = AsyncGoogleMapsCrawler(headless=headless, output_file="debug_1.json")
+        active_crawler = AsyncGoogleMapsCrawler(
+            headless=headless, 
+            output_file="debug_1.json",
+            config=config
+        )
         await active_crawler.setup_browser()
         
         update_state(status="Browser ready, starting search...", progress=10)
         
         # Build search queries
         search_queries = [query] if query else ["coffee shop jakarta"]
-        if query and "jakarta" in query.lower():
-            base = query.lower().replace("jakarta", "").strip()
-            if base:
-                search_queries.extend([
-                    f"{base} jakarta selatan",
-                    f"{base} jakarta pusat",
-                    f"{base} jakarta barat",
-                ])
+        
+        # If use_sub_areas is enabled, automatically expand the search
+        if use_sub_areas:
+            # Common sub-area expanding (Generic)
+            if "jakarta" in query.lower():
+                base = query.lower().replace("jakarta", "").strip()
+                if base:
+                    search_queries.extend([
+                        f"{base} jakarta selatan",
+                        f"{base} jakarta pusat",
+                        f"{base} jakarta barat",
+                        f"{base} jakarta timur",
+                        f"{base} jakarta utara",
+                    ])
         
         all_place_urls = []
         total_queries = len(search_queries)
@@ -931,7 +960,11 @@ async def start_scraping(
             request.query,
             request.max_results,
             request.headless,
-            current_user["id"]
+            current_user["id"],
+            request.phone_required,
+            request.website_required,
+            request.use_sub_areas,
+            request.country_code
         )
     )
     

@@ -56,9 +56,18 @@ Used to populate the main dashboard cards.
   {
     "query": "coffee shop jakarta",
     "max_results": 20,
-    "headless": true
+    "headless": true,
+    "phone_required": true,
+    "website_required": false,
+    "use_sub_areas": false,
+    "country_code": "ID"
   }
   ```
+- **Fields**:
+  - `phone_required`: (bool) Skip businesses with no phone (Default: true)
+  - `website_required`: (bool) Skip businesses with no website (Default: false)
+  - `use_sub_areas`: (bool) Expand search to nearby Jakarta districts (Default: false)
+  - `country_code`: (str) Phone format (Default: "ID")
 
 ### Get Scraping Status
 `GET /scrape/status`

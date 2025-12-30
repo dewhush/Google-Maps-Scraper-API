@@ -21,9 +21,7 @@ from pydantic import EmailStr, BaseModel
 import secrets
 import resend
 from dotenv import load_dotenv
-from dotenv import load_dotenv
 
-# Load environment variables
 # Load environment variables
 load_dotenv()
 print("=" * 60)
@@ -64,18 +62,7 @@ app = FastAPI(
 
 # (Rate Limiter temporarily disabled for connectivity troubleshooting)
 
-# --- ADVANCED SECURITY MIDDLEWARE ---
-@app.middleware("http")
-async def secure_middleware(request, call_next):
-    # Process the request
-    response = await call_next(request)
-    
-    # Add Basic Security Headers
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    
-    return response
+# Security headers will be handled by reverse proxy or simple CORS for now
 
 # CORS configuration for production
 app.add_middleware(
@@ -380,7 +367,7 @@ def get_otp_email_html(otp: str) -> str:
     """
 
 @app.post("/api/auth/send-otp")
-async def send_otp(request: Request, email_req: EmailRequest):
+async def send_otp(email_req: EmailRequest):
     """Send OTP to email"""
     email = email_req.email
     
@@ -422,7 +409,7 @@ async def send_otp(request: Request, email_req: EmailRequest):
 
 
 @app.post("/api/auth/verify-otp")
-async def verify_otp(request: Request, otp_data: OTPVerify):
+async def verify_otp(otp_data: OTPVerify):
     """Verify OTP code"""
     email = otp_data.email
     if email not in otp_storage:
@@ -445,7 +432,7 @@ async def verify_otp(request: Request, otp_data: OTPVerify):
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-async def register(request: Request, user_data: RegisterRequest):
+async def register(user_data: RegisterRequest):
     """Register a new user"""
     # Check if user exists
     existing = supabase.table("users").select("id").eq("email", user_data.email).execute()
@@ -498,7 +485,7 @@ async def register(request: Request, user_data: RegisterRequest):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(request: Request, credentials: UserLogin):
+async def login(credentials: UserLogin):
     """Login and get access token"""
     response = supabase.table("users").select("*").eq("email", credentials.email).execute()
     
@@ -524,7 +511,7 @@ async def login(request: Request, credentials: UserLogin):
 
 
 @app.post("/api/auth/forgot-password")
-async def forgot_password(request: Request, request_data: ForgotPasswordRequest):
+async def forgot_password(request_data: ForgotPasswordRequest):
     """Generate reset OTP and send email"""
     email = request_data.email
     
@@ -575,7 +562,7 @@ async def forgot_password(request: Request, request_data: ForgotPasswordRequest)
 
 
 @app.post("/api/auth/reset-password")
-async def reset_password(request: Request, request_data: ResetPasswordRequest):
+async def reset_password(request_data: ResetPasswordRequest):
     """Verify OTP and update password"""
     email = request_data.email
     
@@ -601,7 +588,6 @@ async def reset_password(request: Request, request_data: ResetPasswordRequest):
     try:
         response = supabase.table("users").update({"password_hash": new_hash}).eq("email", email).execute()
         if not response.data:
-            # Maybe user doesn't exist?
             raise HTTPException(status_code=404, detail="User not found")
             
         # Clear OTP
@@ -612,45 +598,44 @@ async def reset_password(request: Request, request_data: ResetPasswordRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-
+        
 @app.post("/api/auth/token", response_model=TokenResponse)
-async def login_token(request: Request, credentials: UserLogin):
+async def login_token(credentials: UserLogin):
     """Alias for login (Frontend compatibility)"""
-    return await login(request, credentials)
+    return await login(credentials)
 
 
 # ==================== AUTH ALIASES (Compatibility Layer) ====================
 # These routes match the legacy or flat paths used by some frontend components
 
 @app.post("/auth/send-otp")
-async def send_otp_alias(request: Request, email_req: EmailRequest):
-    return await send_otp(request, email_req)
+async def send_otp_alias(email_req: EmailRequest):
+    return await send_otp(email_req)
 
 @app.post("/auth/verify-otp")
-async def verify_otp_alias(request: Request, otp_data: OTPVerify):
-    return await verify_otp(request, otp_data)
+async def verify_otp_alias(otp_data: OTPVerify):
+    return await verify_otp(otp_data)
 
 @app.post("/auth/register", response_model=TokenResponse)
-async def register_alias(request: Request, user_data: RegisterRequest):
-    return await register(request, user_data)
+async def register_alias(user_data: RegisterRequest):
+    return await register(user_data)
 
 @app.post("/auth/login", response_model=TokenResponse)
-async def login_alias(request: Request, credentials: UserLogin):
-    return await login(request, credentials)
+async def login_alias(credentials: UserLogin):
+    return await login(credentials)
 
 @app.post("/auth/token", response_model=TokenResponse)
-async def token_compat(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+async def token_compat(form_data: OAuth2PasswordRequestForm = Depends()):
     credentials = UserLogin(email=form_data.username, password=form_data.password)
-    return await login(request, credentials)
+    return await login(credentials)
 
 @app.post("/auth/forgot-password")
-async def forgot_compat(request: Request, request_data: ForgotPasswordRequest):
-    return await forgot_password(request, request_data)
+async def forgot_compat(request_data: ForgotPasswordRequest):
+    return await forgot_password(request_data)
 
 @app.post("/auth/reset-password")
-async def reset_compat(request: Request, request_data: ResetPasswordRequest):
-    return await reset_password(request, request_data)
+async def reset_compat(request_data: ResetPasswordRequest):
+    return await reset_password(request_data)
 
 @app.get("/auth/me", response_model=UserResponse)
 @app.get("/api/auth/me", response_model=UserResponse)

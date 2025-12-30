@@ -694,6 +694,8 @@ class ScrapeRequest(BaseModel):
     website_required: bool = False
     use_sub_areas: bool = False
     country_code: str = "ID"
+    min_rating: float = 0.0
+    min_reviews: int = 0
 
 
 class ScrapeResponse(BaseModel):
@@ -769,7 +771,9 @@ async def run_scraper(
     phone_required: bool = True,
     website_required: bool = False,
     use_sub_areas: bool = False,
-    country_code: str = "ID"
+    country_code: str = "ID",
+    min_rating: float = 0.0,
+    min_reviews: int = 0
 ):
     """Async background task to run the Playwright scraper"""
     global active_crawler
@@ -779,7 +783,9 @@ async def run_scraper(
     config = {
         "phone_required": phone_required,
         "website_required": website_required,
-        "country_code": country_code
+        "country_code": country_code,
+        "min_rating": min_rating,
+        "min_reviews": min_reviews
     }
     
     try:
@@ -798,6 +804,7 @@ async def run_scraper(
             is_running=True,
             progress=0,
             total=100,
+            results_count=0, # Reset count for new run
             current_query=query,
             status="Initializing browser...",
             started_at=datetime.now().isoformat(),
@@ -964,7 +971,9 @@ async def start_scraping(
             request.phone_required,
             request.website_required,
             request.use_sub_areas,
-            request.country_code
+            request.country_code,
+            request.min_rating,
+            request.min_reviews
         )
     )
     

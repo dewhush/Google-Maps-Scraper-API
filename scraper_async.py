@@ -294,9 +294,13 @@ class AsyncGoogleMapsCrawler:
             # 1. Check Filters
             phone_req = self.config.get("phone_required", True)
             web_req = self.config.get("website_required", False)
+            min_rating = self.config.get("min_rating", 0.0)
+            min_reviews = self.config.get("min_reviews", 0)
             
             has_phone = bool(place_data["phone"])
             has_web = bool(place_data["website"])
+            rating = float(place_data.get("rating", 0) or 0)
+            reviews = int(place_data.get("reviews", 0) or 0)
             
             if phone_req and not has_phone:
                 print(f"[SKIP] No Phone: {place_data['name']}")
@@ -304,6 +308,14 @@ class AsyncGoogleMapsCrawler:
                 
             if web_req and not has_web:
                 print(f"[SKIP] No Website: {place_data['name']}")
+                return None
+                
+            if rating < min_rating:
+                print(f"[SKIP] Low Rating ({rating} < {min_rating}): {place_data['name']}")
+                return None
+                
+            if reviews < min_reviews:
+                print(f"[SKIP] Low Reviews ({reviews} < {min_reviews}): {place_data['name']}")
                 return None
 
             # 2. Clean Phone

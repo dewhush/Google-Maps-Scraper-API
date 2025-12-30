@@ -60,7 +60,9 @@ Used to populate the main dashboard cards.
     "phone_required": true,
     "website_required": false,
     "use_sub_areas": false,
-    "country_code": "ID"
+    "country_code": "ID",
+    "min_rating": 4.5,
+    "min_reviews": 10
   }
   ```
 - **Fields**:
@@ -68,6 +70,8 @@ Used to populate the main dashboard cards.
   - `website_required`: (bool) Skip businesses with no website (Default: false)
   - `use_sub_areas`: (bool) Expand search to nearby Jakarta districts (Default: false)
   - `country_code`: (str) Phone format (Default: "ID")
+  - `min_rating`: (float) Minimum rating (e.g. 4.5) to keep (Default: 0.0)
+  - `min_reviews`: (int) Minimum total reviews to keep (Default: 0)
 
 ### Get Scraping Status
 `GET /scrape/status`

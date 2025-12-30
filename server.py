@@ -945,8 +945,7 @@ async def get_contacts(current_user: dict = Depends(get_current_user)):
 @app.get("/api/scrape/status", response_model=StatusResponse)
 async def get_scrape_status(current_user: dict = Depends(get_current_user)):
     """Get current scraping job status (protected)"""
-    with state_lock:
-        return StatusResponse(**scraping_state)
+    return StatusResponse(**scraping_state)
 
 # ... (stop_scraping endpoint remains same) ...
 

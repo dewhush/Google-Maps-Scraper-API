@@ -22,6 +22,14 @@ sudo systemctl stop leadmaps
 # sudo netstat -tulpn | grep :8000
 # (Look for the PID, then use: sudo kill -9 PID)
 
+# SECURITY & BLOCKING (If bots/scanners are hitting your server):
+# 1. Block a specific IP address:
+# sudo ufw deny from 79.124.40.174
+# 2. Check blocked list:
+# sudo ufw status numbered
+# 3. Unblock an IP (use the number from the list above):
+# sudo ufw delete 5
+
 # DASHBOARD STATS ENDPOINT:
 # GET http://3.25.177.97/api/dashboard/stats?token=YOUR_ACCESS_TOKEN
 # (To get token: login on website and copy the 'access_token' from local storage)

@@ -61,6 +61,24 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# Security Middleware to block common bot scanners
+@app.middleware("http")
+async def block_scanners(request, call_next):
+    # Detect common exploit path patterns
+    path = request.url.path.lower()
+    query = str(request.url.query).lower()
+    
+    blocked_patterns = [
+        ".php", ".env", ".git", "xmlrpc", "wp-admin", 
+        "xdebug", "shell", "eval", "config"
+    ]
+    
+    if any(pattern in path or pattern in query for pattern in blocked_patterns):
+        # Silent block for bots
+        return Response(status_code=403, content="Blocked by Security Policy")
+        
+    return await call_next(request)
+
 # CORS configuration for frontend
 app.add_middleware(
     CORSMiddleware,

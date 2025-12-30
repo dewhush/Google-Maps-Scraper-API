@@ -94,7 +94,6 @@ async def secure_middleware(request, call_next):
     response.headers["X-Frame-Options"] = "DENY" # Prevent Clickjacking
     response.headers["X-Content-Type-Options"] = "nosniff" # Prevent MIME sniffing
     response.headers["X-XSS-Protection"] = "1; mode=block" # Prevent Cross-Site Scripting
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains" # Force HTTPS
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none';"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     
@@ -103,11 +102,7 @@ async def secure_middleware(request, call_next):
 # CORS configuration for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://www.leadmaps.web.id",
-        "https://leadmaps.web.id"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

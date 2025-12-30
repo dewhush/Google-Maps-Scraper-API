@@ -11,6 +11,17 @@ sudo systemctl restart leadmaps
 # To check logs:
 journalctl -u leadmaps -f
 
+# SHUTDOWN / STOP SERVICE:
+sudo systemctl stop leadmaps
+
+# TROUBLESHOOTING (If port 8000 is 'already in use'):
+# Option A (Kill directly):
+# sudo fuser -k 8000/tcp
+
+# Option B (Find and kill manually):
+# sudo netstat -tulpn | grep :8000
+# (Look for the PID, then use: sudo kill -9 PID)
+
 # DASHBOARD STATS ENDPOINT:
 # GET http://3.25.177.97/api/dashboard/stats?token=YOUR_ACCESS_TOKEN
 # (To get token: login on website and copy the 'access_token' from local storage)

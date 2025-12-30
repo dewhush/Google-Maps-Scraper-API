@@ -120,7 +120,10 @@ Track and retrieve past scraping results.
 ### Get All Contacts
 `GET /contacts`
 - **Auth Required**: Yes
-- **Query Param Support**: `?token=YOUR_TOKEN`
+- **Query Params**:
+  - `token`: (optional) Bearer token
+  - `history_id`: (optional) Filter results by a specific scrape session ID.
+- **Note**: If `history_id` is NOT provided, it returns ALL leads ever scraped by the user.
 
 ### Download JSON
 `GET /download/json`

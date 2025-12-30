@@ -78,6 +78,7 @@ scraping_state = {
     "current_query": "",
     "status": "idle",
     "results_count": 0,
+    "history_id": None,
     "started_at": None,
     "error": None
 }
@@ -701,6 +702,7 @@ class ScrapeRequest(BaseModel):
 class ScrapeResponse(BaseModel):
     message: str
     status: str
+    history_id: Optional[str] = None
 
 
 class ContactResponse(BaseModel):
@@ -730,6 +732,7 @@ class StatusResponse(BaseModel):
     current_query: str
     status: str
     results_count: int
+    history_id: Optional[str] = None
     started_at: Optional[str]
     error: Optional[str]
 
@@ -764,6 +767,7 @@ def update_state(**kwargs):
 
 
 async def run_scraper(
+    history_id: str,
     query: str, 
     max_results: int, 
     headless: bool, 
@@ -777,7 +781,6 @@ async def run_scraper(
 ):
     """Async background task to run the Playwright scraper"""
     global active_crawler
-    history_id = None
     found_contact_ids = []
     
     config = {
@@ -789,22 +792,12 @@ async def run_scraper(
     }
     
     try:
-        # 1. Create History Record (Initially)
-        history_resp = supabase.table("scrape_history").insert({
-            "user_id": user_id,
-            "query": query,
-            "results_count": 0,
-            "leads": []
-        }).execute()
-        
-        if history_resp.data:
-            history_id = history_resp.data[0]["id"]
-            
         update_state(
             is_running=True,
             progress=0,
             total=100,
             results_count=0, # Reset count for new run
+            history_id=history_id,
             current_query=query,
             status="Initializing browser...",
             started_at=datetime.now().isoformat(),
@@ -908,7 +901,7 @@ async def run_scraper(
             
             await asyncio.sleep(1)
         
-        # 2. Update History Record (Finally)
+        # 1. Update History Record (Finally)
         if history_id:
             supabase.table("scrape_history").update({
                 "results_count": len(found_contact_ids),
@@ -961,13 +954,28 @@ async def start_scraping(
     if scraping_state["is_running"]:
         raise HTTPException(status_code=409, detail="A scraping job is already running")
     
-    # Use asyncio.create_task for async background execution
+    user_id = current_user["id"]
+    
+    # 1. Create History Record First
+    history_resp = supabase.table("scrape_history").insert({
+        "user_id": user_id,
+        "query": request.query,
+        "results_count": 0,
+        "leads": []
+    }).execute()
+    
+    history_id = None
+    if history_resp.data:
+        history_id = history_resp.data[0]["id"]
+    
+    # 2. Start background task with history_id
     asyncio.create_task(
         run_scraper(
+            history_id,
             request.query,
             request.max_results,
             request.headless,
-            current_user["id"],
+            user_id,
             request.phone_required,
             request.website_required,
             request.use_sub_areas,
@@ -979,16 +987,35 @@ async def start_scraping(
     
     return {
         "message": f"Scraping started for: {request.query}",
-        "status": "started"
+        "status": "started",
+        "history_id": history_id
     }
 
 
 @app.get("/api/contacts", response_model=ContactsListResponse)
-async def get_contacts(current_user: dict = Depends(get_current_user)):
-    """Get all scraped contacts (protected)"""
-    # Fetch from Supabase
-    response = supabase.table("contacts").select("*").eq("user_id", current_user["id"]).execute()
-    contacts = response.data
+async def get_contacts(
+    history_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get contacts - optionally filtered by history_id (protected)"""
+    user_id = current_user["id"]
+    
+    if history_id:
+        # Fetch specific leads from history
+        hist_resp = supabase.table("scrape_history").select("leads").eq("id", history_id).eq("user_id", user_id).execute()
+        if not hist_resp.data:
+            return {"contacts": [], "total": 0}
+        
+        lead_ids = hist_resp.data[0].get("leads", [])
+        if not lead_ids:
+            return {"contacts": [], "total": 0}
+            
+        contacts_resp = supabase.table("contacts").select("*").in_("id", lead_ids).execute()
+        contacts = contacts_resp.data
+    else:
+        # Fetch all contacts for user
+        contacts_resp = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+        contacts = contacts_resp.data
     
     result = []
     for c in contacts:
@@ -1183,8 +1210,11 @@ async def download_csv(current_user: dict = Depends(get_current_user_token)):
 
 # --- More Compatibility Routes ---
 @app.get("/contacts", response_model=ContactsListResponse)
-async def contacts_compat(current_user: dict = Depends(get_current_user_token)):
-    return await get_contacts(current_user)
+async def contacts_compat(
+    history_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user_token)
+):
+    return await get_contacts(history_id, current_user)
 
 @app.post("/scrape", response_model=ScrapeResponse)
 async def scrape_compat(request: ScrapeRequest, current_user: dict = Depends(get_current_user_token)):

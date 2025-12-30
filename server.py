@@ -17,7 +17,6 @@ from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
-from pydantic import EmailStr, BaseModel
 import secrets
 import resend
 from dotenv import load_dotenv
@@ -60,7 +59,13 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# (Rate Limiter temporarily disabled for connectivity troubleshooting)
+# --- DEBUG LOGGING MIDDLEWARE ---
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    print(f"📡 [API REQUEST]: {request.method} {request.url.path}")
+    response = await call_next(request)
+    print(f"✅ [API RESPONSE]: {response.status_code}")
+    return response
 
 # Security headers will be handled by reverse proxy or simple CORS for now
 
@@ -131,9 +136,6 @@ resend.api_key = os.getenv("RESEND_API_KEY") or os.getenv("MAIL_PASSWORD", "re_g
 
 # Global crawler instance (async Playwright)
 active_crawler: Optional[AsyncGoogleMapsCrawler] = None
-
-
-# ==================== AUTH MODELS ====================
 
 
 # ==================== AUTH MODELS ====================

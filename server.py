@@ -37,6 +37,7 @@ print("=" * 60)
 
 # Import Supabase Client
 from database import supabase
+from main import GoogleMapsCrawler
 # import models - No longer needed
 # from sqlalchemy.orm import Session
 
@@ -130,17 +131,19 @@ active_crawler: Optional[GoogleMapsCrawler] = None
 
 # ==================== AUTH MODELS ====================
 
-class UserRegister(BaseModel):
+
+# ==================== AUTH MODELS ====================
+
+class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
-    otp: Optional[str] = None
+    otp: str  # Required as per contract
 
 
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
-
 
 
 class EmailRequest(BaseModel):
@@ -163,7 +166,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: int
+    id: str
     name: str
     email: str
 
@@ -174,7 +177,11 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
+
 # ==================== AUTH HELPERS ====================
+
+def generate_numeric_otp(length=6) -> str:
+    return ''.join([str(secrets.randbelow(10)) for _ in range(length)])
 
 def load_users() -> dict:
     """Load users from JSON file"""
@@ -209,7 +216,10 @@ def verify_token(token: str) -> dict:
         if not response.data:
             raise HTTPException(status_code=401, detail="User not found")
             
-        return response.data[0] # Return the user dict
+        user = response.data[0]
+        # Ensure ID is string for consistency
+        user['id'] = str(user['id'])
+        return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -346,7 +356,7 @@ async def send_otp(email_req: EmailRequest):
     email = email_req.email
     
     # Generate OTP
-    otp = secrets.token_hex(3).upper() # 6 chars
+    otp = generate_numeric_otp(6)
     otp_storage[email] = {
         "otp": otp,
         "expires": datetime.now() + timedelta(minutes=10)
@@ -356,16 +366,12 @@ async def send_otp(email_req: EmailRequest):
     
     # Send Email via Resend
     try:
-        # Default to onboarding@resend.dev (Testing)
-        # NOTE: When using onboarding@resend.dev, you can ONLY send to verified "Test Users" in Resend default
-        sender_email = os.getenv("MAIL_FROM")
+        sender_email = os.getenv("MAIL_FROM") or "onboarding@resend.dev"
         api_key_status = "Present" if resend.api_key else "Missing"
-        masked_key = f"{resend.api_key[:5]}..." if resend.api_key else "None"
         
         print(f"--- OTP DEBUG ---")
-        print(f"API Key: {api_key_status} ({masked_key})")
-        print(f"Sender: {sender_email}")
-        print(f"Recipient: {email}")
+        print(f"To: {email}")
+        print(f"OTP: {otp}")
         print(f"-----------------")
         
         params: resend.Emails.SendParams = {
@@ -377,14 +383,13 @@ async def send_otp(email_req: EmailRequest):
         
         email_resp = resend.Emails.send(params)
         print(f"Resend Response: {email_resp}")
-        return {"message": "OTP sent successfully", "debug": str(email_resp)}
+        return {"message": "OTP sent successfully"}
         
     except Exception as e:
         print(f"Resend Error: {str(e)}")
         # For development, print to console as fallback
         print(f"DEV OTP for {email}: {otp}")
-        # Return the actual error to help debugging
-        raise HTTPException(status_code=500, detail=f"Email failed: {str(e)}")
+        return {"message": "OTP sent (Dev Mode: Check Console)"}
 
 
 @app.post("/api/auth/verify-otp")
@@ -411,7 +416,7 @@ async def verify_otp(otp_data: OTPVerify):
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-async def register(user_data: UserRegister):
+async def register(user_data: RegisterRequest):
     """Register a new user"""
     # Check if user exists
     existing = supabase.table("users").select("id").eq("email", user_data.email).execute()
@@ -419,9 +424,6 @@ async def register(user_data: UserRegister):
         raise HTTPException(status_code=400, detail="Email already registered")
         
     # Verify OTP (From persistent OTP storage)
-    if not user_data.otp:
-        raise HTTPException(status_code=400, detail="OTP required")
-        
     email = user_data.email
     if email not in otp_storage:
         raise HTTPException(status_code=400, detail="OTP expired or invalid (request new one)")
@@ -459,7 +461,7 @@ async def register(user_data: UserRegister):
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
-            "id": new_user["id"],
+            "id": str(new_user["id"]),
             "name": new_user["name"],
             "email": new_user["email"]
         }
@@ -485,7 +487,7 @@ async def login(credentials: UserLogin):
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
-            "id": user["id"],
+            "id": str(user["id"]),
             "name": user["name"],
             "email": user["email"]
         }
@@ -497,13 +499,24 @@ async def forgot_password(request: ForgotPasswordRequest):
     """Generate reset OTP and send email"""
     email = request.email
     
-    # Check if user exists (Optional, but good for internal logic)
-    # We return 200 anyway to prevent user enumeration if desired, 
-    # but here let's be explicit if debugging is needed.
-    # To be secure, we should probably just proceed or return 200 with "If email exists..." message.
+    # Check if user exists (Silent Check)
+    user_exists = False
+    try:
+        user_check = supabase.table("users").select("id").eq("email", email).execute()
+        if user_check.data:
+            user_exists = True
+    except Exception as e:
+        print(f"DB Error checking user: {e}")
+        # Proceed as if user not found to avoid erroring out
     
+    if not user_exists:
+        # Return 200 OK to prevent user enumeration
+        # Delay slightly to mimic processing time
+        time.sleep(1) 
+        return {"message": "If this email is registered, a reset code has been sent."}
+
     # Generate OTP
-    otp = secrets.token_hex(3).upper() # 6 chars
+    otp = generate_numeric_otp(6)
     otp_storage[email] = {
         "otp": otp,
         "expires": datetime.now() + timedelta(minutes=10)
@@ -512,7 +525,7 @@ async def forgot_password(request: ForgotPasswordRequest):
     
     # Send Email
     try:
-        sender_email = os.getenv("MAIL_FROM")
+        sender_email = os.getenv("MAIL_FROM") or "onboarding@resend.dev"
         html_content = get_otp_email_html(otp).replace("Verify Your Account", "Reset Your Password")
         
         params: resend.Emails.SendParams = {
@@ -583,6 +596,7 @@ async def login_token(credentials: UserLogin):
 async def login_compat(credentials: UserLogin):
     return await login(credentials)
 
+
 @app.post("/auth/token", response_model=TokenResponse)
 async def token_compat(form_data: OAuth2PasswordRequestForm = Depends()):
     # Contract specifies form-data with username/password
@@ -590,14 +604,16 @@ async def token_compat(form_data: OAuth2PasswordRequestForm = Depends()):
     credentials = UserLogin(email=form_data.username, password=form_data.password)
     return await login(credentials)
 
+
 @app.post("/auth/register", response_model=TokenResponse)
-async def register_compat(user_data: UserRegister):
+async def register_compat(user_data: RegisterRequest):
     return await register(user_data)
+
 
 @app.get("/auth/me", response_model=UserResponse)
 async def me_compat(current_user: dict = Depends(get_current_user)):
     return {
-        "id": current_user["id"],
+        "id": str(current_user["id"]),
         "name": current_user["name"],
         "email": current_user["email"]
     }
@@ -636,7 +652,7 @@ async def verify_otp_alias(otp_data: OTPVerify):
     return await verify_otp(otp_data)
 
 @app.post("/auth/register", response_model=TokenResponse)
-async def register_alias(user_data: UserRegister):
+async def register_alias(user_data: RegisterRequest):
     """Alias for /api/auth/register"""
     return await register(user_data)
 

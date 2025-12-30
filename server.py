@@ -662,31 +662,38 @@ async def login_token(request: Request, credentials: UserLogin):
 # These routes match the legacy or flat paths used by some frontend components
 
 @app.post("/auth/send-otp")
+@limiter.limit("5/minute")
 async def send_otp_alias(request: Request, email_req: EmailRequest):
     return await send_otp(request, email_req)
 
 @app.post("/auth/verify-otp")
+@limiter.limit("10/minute")
 async def verify_otp_alias(request: Request, otp_data: OTPVerify):
     return await verify_otp(request, otp_data)
 
 @app.post("/auth/register", response_model=TokenResponse)
+@limiter.limit("5/minute")
 async def register_alias(request: Request, user_data: RegisterRequest):
     return await register(request, user_data)
 
 @app.post("/auth/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def login_alias(request: Request, credentials: UserLogin):
     return await login(request, credentials)
 
 @app.post("/auth/token", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def token_compat(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     credentials = UserLogin(email=form_data.username, password=form_data.password)
     return await login(request, credentials)
 
 @app.post("/auth/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_compat(request: Request, request_data: ForgotPasswordRequest):
     return await forgot_password(request, request_data)
 
 @app.post("/auth/reset-password")
+@limiter.limit("3/minute")
 async def reset_compat(request: Request, request_data: ResetPasswordRequest):
     return await reset_password(request, request_data)
 

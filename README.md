@@ -1,5 +1,7 @@
 # LeadMaps Backend
 
+**Status:** Auto-Deployment Configured 🚀
+
 LeadMaps Backend is a powerful FastAPI-based application designed to extract high-quality business leads from Google Maps. It features an intelligent scraping engine customized for finding coffee shops (customizable) and includes a full authentication system with OTP verification.
 
 ## 🚀 Features

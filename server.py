@@ -28,6 +28,7 @@ load_dotenv()
 print("=" * 60)
 print(f"STARTUP CONFIG:")
 print(f"MAIL_FROM: {os.getenv('MAIL_FROM')}")
+print(f"RESEND_API_KEY (Set): {'Yes' if os.getenv('RESEND_API_KEY') else 'No'}")
 print(f"MAIL_PASSWORD (Set): {'Yes' if os.getenv('MAIL_PASSWORD') else 'No'}")
 print("=" * 60)
 
@@ -118,7 +119,7 @@ def save_otp_storage(data: dict):
 otp_storage = load_otp_storage()
 
 # Email Configuration (Resend SDK)
-resend.api_key = os.getenv("MAIL_PASSWORD", "re_gigGS3mx_CX8pyx9utdRahVhVeFtJhGXn")
+resend.api_key = os.getenv("RESEND_API_KEY") or os.getenv("MAIL_PASSWORD", "re_gigGS3mx_CX8pyx9utdRahVhVeFtJhGXn")
 
 # Lock for thread-safe state updates
 

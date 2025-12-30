@@ -948,13 +948,13 @@ async def get_contacts(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/scrape/status", response_model=StatusResponse)
-async def get_scrape_status(current_user: dict = Depends(get_current_user)):
+async def get_scrape_status(current_user: dict = Depends(get_current_user_token)):
     """Get current scraping job status (protected)"""
     return StatusResponse(**scraping_state)
 
 
 @app.get("/api/dashboard/stats", response_model=DashboardStatsResponse)
-async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user_token)):
     """Get dashboard overview statistics (protected)"""
     user_id = current_user["id"]
     
@@ -990,13 +990,9 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
             "last_activity": "Error fetching stats"
         }
 
-# Compatibility route for dashboard
-@app.get("/dashboard/stats", response_model=DashboardStatsResponse)
-async def dashboard_stats_compat(current_user: dict = Depends(get_current_user)):
-    return await get_dashboard_stats(current_user)
 
 @app.post("/api/scrape/stop")
-async def stop_scraping(current_user: dict = Depends(get_current_user)):
+async def stop_scraping(current_user: dict = Depends(get_current_user_token)):
     """Stop the current scraping job (protected)"""
     global active_crawler
     
@@ -1019,7 +1015,7 @@ async def stop_scraping(current_user: dict = Depends(get_current_user)):
 
 # Compatibility route for stop
 @app.post("/scrape/stop")
-async def stop_compat(current_user: dict = Depends(get_current_user)):
+async def stop_compat(current_user: dict = Depends(get_current_user_token)):
     return await stop_scraping(current_user)
 
 @app.get("/api/download/json")
@@ -1074,16 +1070,20 @@ async def download_csv(current_user: dict = Depends(get_current_user_token)):
 
 # --- More Compatibility Routes ---
 @app.get("/contacts", response_model=ContactsListResponse)
-async def contacts_compat(current_user: dict = Depends(get_current_user)):
+async def contacts_compat(current_user: dict = Depends(get_current_user_token)):
     return await get_contacts(current_user)
 
 @app.post("/scrape", response_model=ScrapeResponse)
-async def scrape_compat(request: ScrapeRequest, current_user: dict = Depends(get_current_user)):
+async def scrape_compat(request: ScrapeRequest, current_user: dict = Depends(get_current_user_token)):
     return await start_scraping(request, current_user)
 
 @app.get("/scrape/status", response_model=StatusResponse)
-async def scrape_status_compat(current_user: dict = Depends(get_current_user)):
+async def scrape_status_compat(current_user: dict = Depends(get_current_user_token)):
     return await get_scrape_status(current_user)
+
+@app.get("/dashboard/stats", response_model=DashboardStatsResponse)
+async def dashboard_stats_compat(current_user: dict = Depends(get_current_user_token)):
+    return await get_dashboard_stats(current_user)
 
 @app.get("/download/json")
 async def dl_json_compat(current_user: dict = Depends(get_current_user_token)):

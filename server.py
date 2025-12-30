@@ -75,8 +75,45 @@ scraping_state = {
     "error": None
 }
 
-# OTP Storage (In-memory for simplicity, use Redis/DB in production)
-otp_storage = {}
+# OTP Storage (Persistent file-based storage)
+OTP_FILE = "otp_storage.json"
+
+def load_otp_storage() -> dict:
+    """Load OTP storage from JSON file"""
+    if not os.path.exists(OTP_FILE):
+        return {}
+    try:
+        with open(OTP_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # Clean expired OTPs on load
+            now = datetime.now()
+            cleaned = {}
+            for email, otp_data in data.items():
+                expires = datetime.fromisoformat(otp_data["expires"])
+                if now < expires:
+                    cleaned[email] = otp_data
+            return cleaned
+    except Exception as e:
+        print(f"Error loading OTP storage: {e}")
+        return {}
+
+def save_otp_storage(data: dict):
+    """Save OTP storage to JSON file"""
+    try:
+        # Convert datetime to ISO string for JSON serialization
+        serializable = {}
+        for email, otp_data in data.items():
+            serializable[email] = {
+                "otp": otp_data["otp"],
+                "expires": otp_data["expires"].isoformat() if isinstance(otp_data["expires"], datetime) else otp_data["expires"]
+            }
+        with open(OTP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(serializable, f, indent=2)
+    except Exception as e:
+        print(f"Error saving OTP storage: {e}")
+
+# Load existing OTPs on startup
+otp_storage = load_otp_storage()
 
 # Email Configuration (Resend SDK)
 resend.api_key = os.getenv("MAIL_PASSWORD", "re_gigGS3mx_CX8pyx9utdRahVhVeFtJhGXn")
@@ -311,6 +348,8 @@ async def send_otp(email_req: EmailRequest):
         "otp": otp,
         "expires": datetime.now() + timedelta(minutes=10)
     }
+    # Save to persistent storage
+    save_otp_storage(otp_storage)
     
     # Send Email via Resend
     try:
@@ -353,8 +392,13 @@ async def verify_otp(otp_data: OTPVerify):
         raise HTTPException(status_code=400, detail="OTP expired or invalid")
         
     stored_data = otp_storage[email]
-    if datetime.now() > stored_data["expires"]:
+    # Handle both datetime and string formats
+    expires = stored_data["expires"]
+    if isinstance(expires, str):
+        expires = datetime.fromisoformat(expires)
+    if datetime.now() > expires:
         del otp_storage[email]
+        save_otp_storage(otp_storage)
         raise HTTPException(status_code=400, detail="OTP expired")
         
     if stored_data["otp"] != otp_data.otp:
@@ -393,8 +437,9 @@ async def register(user_data: UserRegister):
     }
     data["users"].append(new_user)
     
-    # Cleanup OTP
+    # Cleanup OTP and save
     del otp_storage[email]
+    save_otp_storage(otp_storage)
     
     save_users(data)
     

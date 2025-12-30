@@ -468,6 +468,35 @@ async def login(credentials: UserLogin):
     }
 
 
+@app.post("/api/auth/token", response_model=TokenResponse)
+async def login_token(credentials: UserLogin):
+    """Alias for login (Frontend compatibility)"""
+    return await login(credentials)
+
+
+# --- Compatibility Routes (No /api prefix) ---
+@app.post("/auth/login", response_model=TokenResponse)
+async def login_compat(credentials: UserLogin):
+    return await login(credentials)
+
+@app.post("/auth/token", response_model=TokenResponse)
+async def token_compat(credentials: UserLogin):
+    return await login(credentials)
+
+@app.post("/auth/register", response_model=TokenResponse)
+async def register_compat(user_data: UserRegister):
+    return await register(user_data)
+
+@app.get("/auth/me", response_model=UserResponse)
+async def me_compat(current_user: dict = Depends(get_current_user)):
+    return {
+        "id": current_user["id"],
+        "name": current_user["name"],
+        "email": current_user["email"]
+    }
+# --------------------------------------------
+
+
 @app.get("/api/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
     """Get current user info"""

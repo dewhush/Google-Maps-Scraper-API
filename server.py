@@ -152,6 +152,16 @@ class OTPVerify(BaseModel):
     otp: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp: str
+    new_password: str
+
+
 class UserResponse(BaseModel):
     id: int
     name: str
@@ -468,6 +478,86 @@ async def login(credentials: UserLogin):
     }
 
 
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """Generate reset OTP and send email"""
+    email = request.email
+    
+    # Check if user exists (Optional, but good for internal logic)
+    # We return 200 anyway to prevent user enumeration if desired, 
+    # but here let's be explicit if debugging is needed.
+    # To be secure, we should probably just proceed or return 200 with "If email exists..." message.
+    
+    # Generate OTP
+    otp = secrets.token_hex(3).upper() # 6 chars
+    otp_storage[email] = {
+        "otp": otp,
+        "expires": datetime.now() + timedelta(minutes=10)
+    }
+    save_otp_storage(otp_storage)
+    
+    # Send Email
+    try:
+        sender_email = os.getenv("MAIL_FROM")
+        html_content = get_otp_email_html(otp).replace("Verify Your Account", "Reset Your Password")
+        
+        params: resend.Emails.SendParams = {
+            "from": f"Lead Maps Team <{sender_email}>",
+            "to": [email],
+            "subject": "Reset Your Password",
+            "html": html_content
+        }
+        
+        resend.Emails.send(params)
+        return {"message": "Password reset email sent"}
+        
+    except Exception as e:
+        print(f"Email error: {e}")
+        # On localhost without Resend, we might want to print OTP
+        print(f"DEV OTP for {email}: {otp}")
+        return {"message": "Password reset email sent (check logs if dev)"}
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    """Verify OTP and update password"""
+    email = request.email
+    
+    if email not in otp_storage:
+        raise HTTPException(status_code=400, detail="OTP expired or invalid")
+        
+    stored_data = otp_storage[email]
+    expires = stored_data["expires"]
+    if isinstance(expires, str):
+        expires = datetime.fromisoformat(expires)
+    
+    if datetime.now() > expires:
+        del otp_storage[email]
+        save_otp_storage(otp_storage)
+        raise HTTPException(status_code=400, detail="OTP expired")
+        
+    if stored_data["otp"] != request.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    
+    # Valid OTP, update password
+    new_hash = pwd_context.hash(request.new_password)
+    
+    try:
+        response = supabase.table("users").update({"password_hash": new_hash}).eq("email", email).execute()
+        if not response.data:
+            # Maybe user doesn't exist?
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        # Clear OTP
+        del otp_storage[email]
+        save_otp_storage(otp_storage)
+        
+        return {"message": "Password reset successfully"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
 @app.post("/api/auth/token", response_model=TokenResponse)
 async def login_token(credentials: UserLogin):
     """Alias for login (Frontend compatibility)"""
@@ -494,6 +584,14 @@ async def me_compat(current_user: dict = Depends(get_current_user)):
         "name": current_user["name"],
         "email": current_user["email"]
     }
+
+@app.post("/auth/forgot-password")
+async def forgot_compat(request: ForgotPasswordRequest):
+    return await forgot_password(request)
+
+@app.post("/auth/reset-password")
+async def reset_compat(request: ResetPasswordRequest):
+    return await reset_password(request)
 # --------------------------------------------
 
 

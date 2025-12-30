@@ -29,14 +29,6 @@ class AsyncGoogleMapsCrawler:
         
         # Progress callback for status updates
         self.on_progress: Optional[callable] = None
-        
-        # Coffee shop keywords
-        self.coffee_keywords = [
-            "coffee", "kopi", "cafe", "kafe", "roaster", "roasting",
-            "espresso", "latte", "cappuccino", "arabica", "robusta",
-            "warkop", "warung kopi", "coffee shop", "kedai kopi",
-            "coffee house", "rumah kopi"
-        ]
     
     async def setup_browser(self) -> None:
         """Initialize Playwright browser"""
@@ -298,34 +290,24 @@ class AsyncGoogleMapsCrawler:
             except:
                 pass
             
-            # Check if it's a coffee shop and has phone
-            is_coffee = self._is_coffee_shop(place_data)
+            # Clean phone number
             has_phone = bool(place_data["phone"])
             
-            if is_coffee and has_phone:
+            if has_phone:
                 place_data["phone"] = self._clean_phone_number(place_data["phone"])
-                print(f"[OK] {place_data['name']} | Phone: {place_data['phone']}")
-                self.results.append(place_data)
-                return place_data
-            else:
-                reason = "Not Coffee Shop" if not is_coffee else "No Phone"
-                print(f"[SKIP] {reason}: {place_data['name']}")
-                return None
+                # Re-check after cleaning (might be invalid length)
+                if place_data["phone"]:
+                    print(f"[OK] {place_data['name']} | Phone: {place_data['phone']}")
+                    self.results.append(place_data)
+                    return place_data
+            
+            print(f"[SKIP] No Phone: {place_data['name']}")
+            return None
             
         except Exception as e:
             print(f"[!] Error scraping {place_url.get('url', 'unknown')}: {str(e)}")
             return None
     
-    def _is_coffee_shop(self, place_data: Dict[str, Any]) -> bool:
-        """Check if place is a coffee shop"""
-        name = place_data.get("name", "").lower()
-        category = place_data.get("category", "").lower()
-        
-        for keyword in self.coffee_keywords:
-            if keyword in name or keyword in category:
-                return True
-        
-        return False
     
     def _clean_phone_number(self, phone: str) -> str:
         """Clean and standardize phone number to Indonesian format"""

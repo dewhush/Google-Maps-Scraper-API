@@ -9,7 +9,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordRequestForm
@@ -21,6 +21,9 @@ from pydantic import EmailStr, BaseModel
 import secrets
 import resend
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Load environment variables
 # Load environment variables
@@ -41,8 +44,11 @@ from database import supabase
 # Use async Playwright scraper instead of Selenium
 from scraper_async import AsyncGoogleMapsCrawler
 
-# Password hashing (using sha256_crypt for better Windows compatibility)
-pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
+# Rate Limiter setup
+limiter = Limiter(key_func=get_remote_address)
+
+# Password hashing (Using Argon2 by default, supports old sha256_crypt for migration)
+pwd_context = CryptContext(schemes=["argon2", "sha256_crypt"], deprecated="auto")
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "leadmaps-super-secret-key-change-in-production")
@@ -61,28 +67,47 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Security Middleware to block common bot scanners
+# Attach rate limiter to app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# --- ADVANCED SECURITY MIDDLEWARE ---
 @app.middleware("http")
-async def block_scanners(request, call_next):
-    # Detect common exploit path patterns
+async def secure_middleware(request, call_next):
+    # 1. Block malicious bot scanners & exploit attempts
     path = request.url.path.lower()
     query = str(request.url.query).lower()
     
     blocked_patterns = [
         ".php", ".env", ".git", "xmlrpc", "wp-admin", 
-        "xdebug", "shell", "eval", "config"
+        "xdebug", "shell", "eval", "config", "backup",
+        "mysql", "setup", "admin", ".cgi", ".sh", ".sql"
     ]
     
     if any(pattern in path or pattern in query for pattern in blocked_patterns):
-        # Silent block for bots
-        return Response(status_code=403, content="Blocked by Security Policy")
+        return Response(status_code=403, content="Security Violation: Request Blocked")
         
-    return await call_next(request)
+    # 2. Process the request
+    response = await call_next(request)
+    
+    # 3. Add High-End Security Headers
+    response.headers["X-Frame-Options"] = "DENY" # Prevent Clickjacking
+    response.headers["X-Content-Type-Options"] = "nosniff" # Prevent MIME sniffing
+    response.headers["X-XSS-Protection"] = "1; mode=block" # Prevent Cross-Site Scripting
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains" # Force HTTPS
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none';"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    return response
 
-# CORS configuration for frontend
+# CORS configuration for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for debugging
+    allow_origins=[
+        "http://localhost:3000",
+        "https://www.leadmaps.web.id",
+        "https://leadmaps.web.id"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -382,7 +407,8 @@ def get_otp_email_html(otp: str) -> str:
     """
 
 @app.post("/api/auth/send-otp")
-async def send_otp(email_req: EmailRequest):
+@limiter.limit("5/minute")
+async def send_otp(request: Request, email_req: EmailRequest):
     """Send OTP to email"""
     email = email_req.email
     
@@ -424,7 +450,8 @@ async def send_otp(email_req: EmailRequest):
 
 
 @app.post("/api/auth/verify-otp")
-async def verify_otp(otp_data: OTPVerify):
+@limiter.limit("10/minute")
+async def verify_otp(request: Request, otp_data: OTPVerify):
     """Verify OTP code"""
     email = otp_data.email
     if email not in otp_storage:
@@ -447,7 +474,8 @@ async def verify_otp(otp_data: OTPVerify):
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-async def register(user_data: RegisterRequest):
+@limiter.limit("5/minute")
+async def register(request: Request, user_data: RegisterRequest):
     """Register a new user"""
     # Check if user exists
     existing = supabase.table("users").select("id").eq("email", user_data.email).execute()
@@ -500,7 +528,8 @@ async def register(user_data: RegisterRequest):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
+@limiter.limit("10/minute")
+async def login(request: Request, credentials: UserLogin):
     """Login and get access token"""
     response = supabase.table("users").select("*").eq("email", credentials.email).execute()
     
@@ -512,6 +541,14 @@ async def login(credentials: UserLogin):
     if not pwd_context.verify(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
+    # Auto-upgrade password hash to Argon2 if it's using the old sha256_crypt scheme
+    if pwd_context.needs_update(user["password_hash"]):
+        try:
+            new_hash = pwd_context.hash(credentials.password)
+            supabase.table("users").update({"password_hash": new_hash}).eq("email", credentials.email).execute()
+        except Exception as e:
+            print(f"Failed to upgrade hash for {credentials.email}: {e}")
+            
     access_token = create_access_token({"sub": user["email"]})
     
     return {
@@ -526,9 +563,10 @@ async def login(credentials: UserLogin):
 
 
 @app.post("/api/auth/forgot-password")
-async def forgot_password(request: ForgotPasswordRequest):
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, request_data: ForgotPasswordRequest):
     """Generate reset OTP and send email"""
-    email = request.email
+    email = request_data.email
     
     # Check if user exists (Silent Check)
     user_exists = False
@@ -577,9 +615,10 @@ async def forgot_password(request: ForgotPasswordRequest):
 
 
 @app.post("/api/auth/reset-password")
-async def reset_password(request: ResetPasswordRequest):
+@limiter.limit("3/minute")
+async def reset_password(request: Request, request_data: ResetPasswordRequest):
     """Verify OTP and update password"""
-    email = request.email
+    email = request_data.email
     
     if email not in otp_storage:
         raise HTTPException(status_code=400, detail="OTP expired or invalid")
@@ -617,90 +656,51 @@ async def reset_password(request: ResetPasswordRequest):
 
 
 @app.post("/api/auth/token", response_model=TokenResponse)
-async def login_token(credentials: UserLogin):
+async def login_token(request: Request, credentials: UserLogin):
     """Alias for login (Frontend compatibility)"""
-    return await login(credentials)
+    return await login(request, credentials)
 
 
-# --- Compatibility Routes (No /api prefix) ---
-@app.post("/auth/login", response_model=TokenResponse)
-async def login_compat(credentials: UserLogin):
-    return await login(credentials)
+# ==================== AUTH ALIASES (Compatibility Layer) ====================
+# These routes match the legacy or flat paths used by some frontend components
 
+@app.post("/auth/send-otp")
+async def send_otp_alias(request: Request, email_req: EmailRequest):
+    return await send_otp(request, email_req)
 
-@app.post("/auth/token", response_model=TokenResponse)
-async def token_compat(form_data: OAuth2PasswordRequestForm = Depends()):
-    # Contract specifies form-data with username/password
-    # Map username -> email
-    credentials = UserLogin(email=form_data.username, password=form_data.password)
-    return await login(credentials)
-
+@app.post("/auth/verify-otp")
+async def verify_otp_alias(request: Request, otp_data: OTPVerify):
+    return await verify_otp(request, otp_data)
 
 @app.post("/auth/register", response_model=TokenResponse)
-async def register_compat(user_data: RegisterRequest):
-    return await register(user_data)
+async def register_alias(request: Request, user_data: RegisterRequest):
+    return await register(request, user_data)
 
+@app.post("/auth/login", response_model=TokenResponse)
+async def login_alias(request: Request, credentials: UserLogin):
+    return await login(request, credentials)
+
+@app.post("/auth/token", response_model=TokenResponse)
+async def token_compat(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    credentials = UserLogin(email=form_data.username, password=form_data.password)
+    return await login(request, credentials)
+
+@app.post("/auth/forgot-password")
+async def forgot_compat(request: Request, request_data: ForgotPasswordRequest):
+    return await forgot_password(request, request_data)
+
+@app.post("/auth/reset-password")
+async def reset_compat(request: Request, request_data: ResetPasswordRequest):
+    return await reset_password(request, request_data)
 
 @app.get("/auth/me", response_model=UserResponse)
-async def me_compat(current_user: dict = Depends(get_current_user)):
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_user)):
     return {
         "id": str(current_user["id"]),
         "name": current_user["name"],
         "email": current_user["email"]
     }
-
-@app.post("/auth/forgot-password")
-async def forgot_compat(request: ForgotPasswordRequest):
-    return await forgot_password(request)
-
-@app.post("/auth/reset-password")
-async def reset_compat(request: ResetPasswordRequest):
-    return await reset_password(request)
-# --------------------------------------------
-
-
-@app.get("/api/auth/me", response_model=UserResponse)
-async def get_me(current_user: dict = Depends(get_current_user)):
-    """Get current user info"""
-    return {
-        "id": current_user["id"],
-        "name": current_user["name"],
-        "email": current_user["email"]
-    }
-
-
-# ==================== AUTH ALIASES (without /api prefix) ====================
-# These are aliases to support frontend calls without the /api prefix
-
-@app.post("/auth/send-otp")
-async def send_otp_alias(email_req: EmailRequest):
-    """Alias for /api/auth/send-otp"""
-    return await send_otp(email_req)
-
-@app.post("/auth/verify-otp")
-async def verify_otp_alias(otp_data: OTPVerify):
-    """Alias for /api/auth/verify-otp"""
-    return await verify_otp(otp_data)
-
-@app.post("/auth/register", response_model=TokenResponse)
-async def register_alias(user_data: RegisterRequest):
-    """Alias for /api/auth/register"""
-    return await register(user_data)
-
-@app.post("/auth/login", response_model=TokenResponse)
-async def login_alias(credentials: UserLogin):
-    """Alias for /api/auth/login"""
-    return await login(credentials)
-
-@app.post("/auth/token", response_model=TokenResponse)
-async def token_alias(credentials: UserLogin):
-    """Alias for /api/auth/login (frontend uses /auth/token)"""
-    return await login(credentials)
-
-@app.get("/auth/me", response_model=UserResponse)
-async def get_me_alias(current_user: dict = Depends(get_current_user)):
-    """Alias for /api/auth/me"""
-    return await get_me(current_user)
 
 
 # ==================== SCRAPING MODELS ====================

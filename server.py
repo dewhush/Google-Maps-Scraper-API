@@ -892,9 +892,16 @@ async def run_scraper(
                     save_resp = supabase.table("contacts").insert(new_contact).execute()
                     if save_resp.data:
                         found_contact_ids.append(save_resp.data[0]["id"])
-                    
-                    count_resp = supabase.table("contacts").select("*", count="exact", head=True).eq("user_id", user_id).execute()
-                    update_state(results_count=count_resp.count or 0)
+                        
+                        # 1. Update live count based ONLY on current session
+                        update_state(results_count=len(found_contact_ids))
+                        
+                        # 2. Update history record incrementally so frontend can see results via history_id
+                        if history_id:
+                            supabase.table("scrape_history").update({
+                                "results_count": len(found_contact_ids),
+                                "leads": found_contact_ids
+                            }).eq("id", history_id).execute()
                     
             except Exception as e:
                 print(f"Error scraping/saving {place_url}: {e}")

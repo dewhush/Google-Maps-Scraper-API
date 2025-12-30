@@ -26,8 +26,7 @@ load_dotenv()
 print("=" * 60)
 print(f"STARTUP CONFIG:")
 print(f"MAIL_FROM: {os.getenv('MAIL_FROM')}")
-print(f"RESEND_API_KEY (Set): {'Yes' if os.getenv('RESEND_API_KEY') else 'No'}")
-print(f"MAIL_PASSWORD (Set): {'Yes' if os.getenv('MAIL_PASSWORD') else 'No'}")
+print(f"SECRET_KEY (Set): {'Yes' if os.getenv('SECRET_KEY') else 'No (Using Default)'}")
 print("=" * 60)
 
 # ... (Environment logging) ...
@@ -47,8 +46,8 @@ SECRET_KEY = os.getenv("SECRET_KEY", "leadmaps-super-secret-key-change-in-produc
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-# Security
-security = HTTPBearer()
+# Security (Auto-error disabled to allow custom query param token fallback)
+security = HTTPBearer(auto_error=False)
 
 # Users storage file
 USERS_FILE = "users.json"
@@ -247,10 +246,14 @@ def get_current_user_token(
 ) -> dict:
     """Get active user from Header OR Query param (for downloads)"""
     if credentials:
+        print(f"🔑 Auth method: Bearer Token")
         return verify_token(credentials.credentials)
     if token:
+        print(f"🔑 Auth method: Query Parameter (?token=...)")
         return verify_token(token)
-    raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    print(f"❌ Auth method: NONE (No header and no query param)")
+    raise HTTPException(status_code=401, detail="Authentication required (Bearer token or ?token=...)")
 
 
 # ==================== AUTH ENDPOINTS ====================

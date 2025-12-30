@@ -31,13 +31,14 @@ print(f"MAIL_FROM: {os.getenv('MAIL_FROM')}")
 print(f"MAIL_PASSWORD (Set): {'Yes' if os.getenv('MAIL_PASSWORD') else 'No'}")
 print("=" * 60)
 
-# Import the crawler
-from main import GoogleMapsCrawler
+# ... (Environment logging) ...
 
-# JWT Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "leadmaps-secret-key-change-in-production-2024")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+# ... (Environment logging) ...
+
+# Import Supabase Client
+from database import supabase
+# import models - No longer needed
+# from sqlalchemy.orm import Session
 
 # Password hashing (using sha256_crypt for better Windows compatibility)
 pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
@@ -152,7 +153,7 @@ class OTPVerify(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: str
+    id: int
     name: str
     email: str
 
@@ -179,33 +180,6 @@ def save_users(data: dict):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def get_user_by_email(email: str) -> Optional[dict]:
-    """Find user by email"""
-    data = load_users()
-    for user in data["users"]:
-        if user["email"] == email:
-            return user
-    return None
-
-
-def hash_password(password: str) -> str:
-    """Hash a password"""
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against hash"""
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def create_access_token(data: dict) -> str:
-    """Create JWT access token"""
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Dependency to get current authenticated user"""
     token = credentials.credentials
@@ -214,10 +188,15 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         email: str = payload.get("sub")
         if email is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        user = get_user_by_email(email)
-        if user is None:
+        
+        # Determine if ID is int or str based on previous migration
+        # Try to find user
+        response = supabase.table("users").select("*").eq("email", email).execute()
+        
+        if not response.data:
             raise HTTPException(status_code=401, detail="User not found")
-        return user
+            
+        return response.data[0] # Return the user dict
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -411,10 +390,11 @@ async def verify_otp(otp_data: OTPVerify):
 async def register(user_data: UserRegister):
     """Register a new user"""
     # Check if user exists
-    if get_user_by_email(user_data.email):
+    existing = supabase.table("users").select("id").eq("email", user_data.email).execute()
+    if existing.data:
         raise HTTPException(status_code=400, detail="Email already registered")
         
-    # Verify OTP
+    # Verify OTP (From persistent OTP storage)
     if not user_data.otp:
         raise HTTPException(status_code=400, detail="OTP required")
         
@@ -427,21 +407,26 @@ async def register(user_data: UserRegister):
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
     # Create new user
-    data = load_users()
-    new_user = {
-        "id": f"user_{len(data['users']) + 1}_{int(time.time())}",
+    new_user_data = {
         "name": user_data.name,
         "email": user_data.email,
-        "password_hash": hash_password(user_data.password),
-        "created_at": datetime.now().isoformat()
+        "password_hash": pwd_context.hash(user_data.password),
+        "created_at": datetime.utcnow().isoformat()
     }
-    data["users"].append(new_user)
+    
+    try:
+        response = supabase.table("users").insert(new_user_data).execute()
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create user")
+        new_user = response.data[0]
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     
     # Cleanup OTP and save
-    del otp_storage[email]
-    save_otp_storage(otp_storage)
-    
-    save_users(data)
+    if email in otp_storage:
+        del otp_storage[email]
+        save_otp_storage(otp_storage)
     
     # Create token
     access_token = create_access_token({"sub": new_user["email"]})
@@ -460,9 +445,14 @@ async def register(user_data: UserRegister):
 @app.post("/api/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
     """Login and get access token"""
-    user = get_user_by_email(credentials.email)
+    response = supabase.table("users").select("*").eq("email", credentials.email).execute()
     
-    if not user or not verify_password(credentials.password, user["password_hash"]):
+    if not response.data:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    user = response.data[0]
+    
+    if not pwd_context.verify(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     access_token = create_access_token({"sub": user["email"]})
@@ -573,12 +563,9 @@ def update_state(**kwargs):
                 scraping_state[key] = value
 
 
-def run_scraper(query: str, max_results: int, headless: bool, user_id: str):
+def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
     """Background task to run the scraper"""
     global active_crawler
-    
-    # User-specific output file
-    output_file = f"data_{user_id}.json"
     
     try:
         update_state(
@@ -591,13 +578,11 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: str):
             error=None
         )
         
-        # Create and setup crawler with user-specific output file
-        active_crawler = GoogleMapsCrawler(headless=headless, output_file=output_file)
+        active_crawler = GoogleMapsCrawler(headless=headless, output_file="debug_1.json")
         active_crawler.setup_driver()
         
         update_state(status="Browser ready, starting search...", progress=10)
         
-        # Define search queries based on input
         if query:
             search_queries = [query]
             if "jakarta" in query.lower():
@@ -645,6 +630,7 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: str):
             progress=50
         )
         
+        # Scrape Details and Save to DB
         for i, place_url in enumerate(all_place_urls):
             if not scraping_state["is_running"]:
                 update_state(status="Scraping stopped by user")
@@ -654,24 +640,48 @@ def run_scraper(query: str, max_results: int, headless: bool, user_id: str):
             update_state(
                 status=f"Scraping {i+1}/{total_places}: {place_url.get('name', 'Unknown')[:30]}...",
                 progress=progress,
-                results_count=len(active_crawler.results)
+                results_count=i # Approximate
             )
             
             try:
                 active_crawler.scrape_place_details(place_url)
+                
+                # Get the last scraped item
+                if active_crawler.results:
+                    item = active_crawler.results[-1]
+                    
+                    # Save to Database via API
+                    new_contact = {
+                        "user_id": user_id,
+                        "business_name": item.get("name", "Unknown"),
+                        "phone": item.get("phone", ""),
+                        "address": item.get("address", ""),
+                        "rating": float(item.get("rating", 0) or 0),
+                        "reviews": int(item.get("reviews", 0) or 0),
+                        "category": item.get("category", ""),
+                        "verified": bool(item.get("verified", False)),
+                        "website": item.get("website", ""),
+                        "hours": item.get("hours", ""),
+                        "description": item.get("description", ""),
+                        "raw_data": item # Store full JSON
+                    }
+                    
+                    # Insert directly
+                    supabase.table("contacts").insert(new_contact).execute()
+                    
+                    # Update state with true DB count
+                    count_resp = supabase.table("contacts").select("*", count="exact", head=True).eq("user_id", user_id).execute()
+                    update_state(results_count=count_resp.count)
+                    
             except Exception as e:
-                print(f"Error scraping {place_url}: {e}")
+                print(f"Error scraping/saving {place_url}: {e}")
             
             time.sleep(1)
-        
-        update_state(status="Saving results...", progress=95)
-        active_crawler.save_simple_format("data.json")
         
         update_state(
             is_running=False,
             progress=100,
-            status="Completed!",
-            results_count=len(active_crawler.results)
+            status="Completed!"
         )
         
     except Exception as e:
@@ -731,36 +741,27 @@ async def start_scraping(
 @app.get("/api/contacts", response_model=ContactsListResponse)
 async def get_contacts(current_user: dict = Depends(get_current_user)):
     """Get all scraped contacts (protected)"""
-    user_id = current_user["id"]
-    data_file = f"data_{user_id}.json"
+    # Fetch from Supabase
+    response = supabase.table("contacts").select("*").eq("user_id", current_user["id"]).execute()
+    contacts = response.data
     
-    if not os.path.exists(data_file):
-        return {"contacts": [], "total": 0}
-        
-    try:
-        with open(data_file, 'r', encoding='utf-8') as f:
-            raw_data = json.load(f)
+    result = []
+    for c in contacts:
+        result.append({
+            "id": str(c.get("id")),
+            "business_name": c.get("business_name", ""),
+            "phone": c.get("phone", ""),
+            "address": c.get("address", "") or "",
+            "rating": float(c.get("rating", 0) or 0.0),
+            "reviews": int(c.get("reviews", 0) or 0),
+            "category": c.get("category", "") or "",
+            "verified": c.get("verified", False),
+            "website": c.get("website", "") or "",
+            "hours": c.get("hours", "") or "",
+            "description": c.get("description", "") or ""
+        })
             
-        contacts = []
-        for i, item in enumerate(raw_data.get("contacts", [])):
-            contacts.append({
-                "id": str(i),
-                "business_name": item.get("name", ""),
-                "phone": item.get("phone", ""),
-                "address": item.get("address", ""),
-                "rating": float(item.get("rating", 0) or 0),
-                "reviews": int(item.get("reviews", 0) or 0),
-                "category": item.get("category", ""),
-                "verified": bool(item.get("verified", False)),
-                "website": item.get("website", ""),
-                "hours": item.get("hours", ""),
-                "description": item.get("description", "")
-            })
-            
-        return {"contacts": contacts, "total": len(contacts)}
-    except Exception as e:
-        print(f"Error reading data: {e}")
-        return {"contacts": [], "total": 0}
+    return {"contacts": result, "total": len(result)}
 
 
 @app.get("/api/scrape/status", response_model=StatusResponse)

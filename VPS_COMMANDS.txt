@@ -12,5 +12,5 @@ sudo systemctl restart leadmaps
 journalctl -u leadmaps -f
 
 # DASHBOARD STATS ENDPOINT:
-# GET http://3.25.177.97/api/dashboard/stats
-# (Or /dashboard/stats for compatibility)
+# GET http://3.25.177.97/api/dashboard/stats?token=YOUR_ACCESS_TOKEN
+# (To get token: login on website and copy the 'access_token' from local storage)

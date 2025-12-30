@@ -735,6 +735,21 @@ class DashboardStatsResponse(BaseModel):
     last_activity: Optional[str] = "Never"
 
 
+class ScrapeHistoryResponse(BaseModel):
+    id: str
+    query: str
+    results_count: int
+    created_at: str
+
+
+class HistoryDetailResponse(BaseModel):
+    id: str
+    query: str
+    results_count: int
+    created_at: str
+    contacts: list[ContactResponse]
+
+
 def update_state(**kwargs):
     """Update scraping state (async-safe since we're single-threaded in asyncio)"""
     for key, value in kwargs.items():
@@ -745,8 +760,21 @@ def update_state(**kwargs):
 async def run_scraper(query: str, max_results: int, headless: bool, user_id: int):
     """Async background task to run the Playwright scraper"""
     global active_crawler
+    history_id = None
+    found_contact_ids = []
     
     try:
+        # 1. Create History Record (Initially)
+        history_resp = supabase.table("scrape_history").insert({
+            "user_id": user_id,
+            "query": query,
+            "results_count": 0,
+            "leads": []
+        }).execute()
+        
+        if history_resp.data:
+            history_id = history_resp.data[0]["id"]
+            
         update_state(
             is_running=True,
             progress=0,
@@ -764,22 +792,15 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
         update_state(status="Browser ready, starting search...", progress=10)
         
         # Build search queries
-        if query:
-            search_queries = [query]
-            if "jakarta" in query.lower():
-                base = query.replace("jakarta", "").strip()
-                if base:
-                    search_queries.extend([
-                        f"{base} jakarta selatan",
-                        f"{base} jakarta pusat",
-                        f"{base} jakarta barat",
-                    ])
-        else:
-            search_queries = [
-                "coffee shop jakarta",
-                "kedai kopi jakarta",
-                "cafe jakarta"
-            ]
+        search_queries = [query] if query else ["coffee shop jakarta"]
+        if query and "jakarta" in query.lower():
+            base = query.lower().replace("jakarta", "").strip()
+            if base:
+                search_queries.extend([
+                    f"{base} jakarta selatan",
+                    f"{base} jakarta pusat",
+                    f"{base} jakarta barat",
+                ])
         
         all_place_urls = []
         total_queries = len(search_queries)
@@ -787,7 +808,6 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
         # Search phase
         for i, search_query in enumerate(search_queries):
             if not scraping_state["is_running"]:
-                update_state(status="Scraping stopped by user")
                 break
             
             progress = 10 + int((i / total_queries) * 40)
@@ -797,12 +817,10 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
                 progress=progress
             )
             
-            # Async search
             place_urls = await active_crawler.search_places(search_query, max_results=max_results)
-            
-            for place_url in place_urls:
-                if place_url["url"] not in [p["url"] for p in all_place_urls]:
-                    all_place_urls.append(place_url)
+            for p in place_urls:
+                if p["url"] not in [url["url"] for url in all_place_urls]:
+                    all_place_urls.append(p)
             
             await asyncio.sleep(2)
         
@@ -816,22 +834,17 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
         # Scrape details phase
         for i, place_url in enumerate(all_place_urls):
             if not scraping_state["is_running"]:
-                update_state(status="Scraping stopped by user")
                 break
             
             progress = 50 + int((i / max(total_places, 1)) * 45)
             update_state(
                 status=f"Scraping {i+1}/{total_places}: {place_url.get('name', 'Unknown')[:30]}...",
-                progress=progress,
-                results_count=len(active_crawler.results)
+                progress=progress
             )
             
             try:
-                # Async scrape
                 result = await active_crawler.scrape_place_details(place_url)
-                
                 if result:
-                    # Save to Database
                     new_contact = {
                         "user_id": user_id,
                         "business_name": result.get("name", "Unknown"),
@@ -844,12 +857,13 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
                         "website": result.get("website", ""),
                         "hours": result.get("hours", ""),
                         "description": "",
-                        "raw_data": result  # Keep details like lat/lng here
+                        "raw_data": result
                     }
                     
-                    supabase.table("contacts").insert(new_contact).execute()
+                    save_resp = supabase.table("contacts").insert(new_contact).execute()
+                    if save_resp.data:
+                        found_contact_ids.append(save_resp.data[0]["id"])
                     
-                    # Update count
                     count_resp = supabase.table("contacts").select("*", count="exact", head=True).eq("user_id", user_id).execute()
                     update_state(results_count=count_resp.count or 0)
                     
@@ -858,6 +872,13 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
             
             await asyncio.sleep(1)
         
+        # 2. Update History Record (Finally)
+        if history_id:
+            supabase.table("scrape_history").update({
+                "results_count": len(found_contact_ids),
+                "leads": found_contact_ids
+            }).eq("id", history_id).execute()
+            
         update_state(
             is_running=False,
             progress=100,
@@ -991,6 +1012,56 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user_toke
         }
 
 
+@app.get("/api/history", response_model=list[ScrapeHistoryResponse])
+async def get_history(current_user: dict = Depends(get_current_user_token)):
+    """List all past scraping extractions (protected)"""
+    user_id = current_user["id"]
+    response = supabase.table("scrape_history").select("id, query, results_count, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
+    return response.data
+
+
+@app.get("/api/history/{history_id}", response_model=HistoryDetailResponse)
+async def get_history_detail(history_id: str, current_user: dict = Depends(get_current_user_token)):
+    """Get details of a specific past extraction including contacts (protected)"""
+    user_id = current_user["id"]
+    
+    # 1. Get history record
+    history_resp = supabase.table("scrape_history").select("*").eq("id", history_id).eq("user_id", user_id).execute()
+    if not history_resp.data:
+        raise HTTPException(status_code=404, detail="History record not found")
+    
+    history_data = history_resp.data[0]
+    lead_ids = history_data.get("leads", [])
+    
+    # 2. Fetch associated contacts
+    contacts = []
+    if lead_ids:
+        contacts_resp = supabase.table("contacts").select("*").in_("id", lead_ids).execute()
+        contacts = contacts_resp.data
+        
+    return {
+        "id": history_data["id"],
+        "query": history_data["query"],
+        "results_count": history_data["results_count"],
+        "created_at": history_data["created_at"],
+        "contacts": contacts
+    }
+
+
+@app.delete("/api/history/{history_id}")
+async def delete_history(history_id: str, current_user: dict = Depends(get_current_user_token)):
+    """Delete a past extraction record (protected)"""
+    user_id = current_user["id"]
+    
+    # Check ownership
+    check_resp = supabase.table("scrape_history").select("id").eq("id", history_id).eq("user_id", user_id).execute()
+    if not check_resp.data:
+        raise HTTPException(status_code=404, detail="History record not found")
+    
+    supabase.table("scrape_history").delete().eq("id", history_id).execute()
+    return {"message": "History record deleted successfully"}
+
+
 @app.post("/api/scrape/stop")
 async def stop_scraping(current_user: dict = Depends(get_current_user_token)):
     """Stop the current scraping job (protected)"""
@@ -1084,6 +1155,18 @@ async def scrape_status_compat(current_user: dict = Depends(get_current_user_tok
 @app.get("/dashboard/stats", response_model=DashboardStatsResponse)
 async def dashboard_stats_compat(current_user: dict = Depends(get_current_user_token)):
     return await get_dashboard_stats(current_user)
+
+@app.get("/history", response_model=list[ScrapeHistoryResponse])
+async def history_compat(current_user: dict = Depends(get_current_user_token)):
+    return await get_history(current_user)
+
+@app.get("/history/{history_id}", response_model=HistoryDetailResponse)
+async def history_detail_compat(history_id: str, current_user: dict = Depends(get_current_user_token)):
+    return await get_history_detail(history_id, current_user)
+
+@app.delete("/history/{history_id}")
+async def history_delete_compat(history_id: str, current_user: dict = Depends(get_current_user_token)):
+    return await delete_history(history_id, current_user)
 
 @app.get("/download/json")
 async def dl_json_compat(current_user: dict = Depends(get_current_user_token)):

@@ -83,6 +83,25 @@ Used to populate the main dashboard cards.
 
 ---
 
+## 🕒 Extraction History
+Track and retrieve past scraping results.
+
+### Get Extraction History
+`GET /history`
+- **Auth Required**: Yes
+- **Response**: List of past runs (id, query, count, date)
+
+### Get History Details (with Leads)
+`GET /history/{id}`
+- **Auth Required**: Yes
+- **Response**: Full details of a specific run including all contacts found.
+
+### Delete History Record
+`DELETE /history/{id}`
+- **Auth Required**: Yes
+
+---
+
 ## 💾 Data & Downloads
 
 ### Get All Contacts

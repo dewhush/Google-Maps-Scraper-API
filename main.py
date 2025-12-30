@@ -131,8 +131,8 @@ class GoogleMapsCrawler:
             ]
             chrome_options.add_argument(f'user-agent={random.choice(user_agents)}')
             
-            # Use system chromedriver
-            service = Service("/usr/bin/chromedriver")
+            # Use snap chromedriver (matches snap chromium version)
+            service = Service("/snap/chromium/current/usr/lib/chromium-browser/chromedriver")
             
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             print("[OK] Chrome driver initialized on Ubuntu VPS")

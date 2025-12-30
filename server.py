@@ -21,9 +21,7 @@ from pydantic import EmailStr, BaseModel
 import secrets
 import resend
 from dotenv import load_dotenv
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+from dotenv import load_dotenv
 
 # Load environment variables
 # Load environment variables
@@ -44,11 +42,8 @@ from database import supabase
 # Use async Playwright scraper instead of Selenium
 from scraper_async import AsyncGoogleMapsCrawler
 
-# Rate Limiter setup
-limiter = Limiter(key_func=get_remote_address)
-
-# Password hashing (Using Argon2 by default, supports old sha256_crypt for migration)
-pwd_context = CryptContext(schemes=["argon2", "sha256_crypt"], deprecated="auto")
+# Password hashing (using sha256_crypt for compatibility)
+pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "leadmaps-super-secret-key-change-in-production")
@@ -67,35 +62,18 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Attach rate limiter to app
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# (Rate Limiter temporarily disabled for connectivity troubleshooting)
 
 # --- ADVANCED SECURITY MIDDLEWARE ---
 @app.middleware("http")
 async def secure_middleware(request, call_next):
-    # 1. Block malicious bot scanners & exploit attempts
-    path = request.url.path.lower()
-    query = str(request.url.query).lower()
-    
-    blocked_patterns = [
-        ".php", ".env", ".git", "xmlrpc", "wp-admin", 
-        "xdebug", "shell", "eval", "config", "backup",
-        "mysql", "setup", "admin", ".cgi", ".sh", ".sql"
-    ]
-    
-    if any(pattern in path or pattern in query for pattern in blocked_patterns):
-        return Response(status_code=403, content="Security Violation: Request Blocked")
-        
-    # 2. Process the request
+    # Process the request
     response = await call_next(request)
     
-    # 3. Add High-End Security Headers
-    response.headers["X-Frame-Options"] = "DENY" # Prevent Clickjacking
-    response.headers["X-Content-Type-Options"] = "nosniff" # Prevent MIME sniffing
-    response.headers["X-XSS-Protection"] = "1; mode=block" # Prevent Cross-Site Scripting
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none';"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Add Basic Security Headers
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
     
     return response
 
@@ -402,7 +380,6 @@ def get_otp_email_html(otp: str) -> str:
     """
 
 @app.post("/api/auth/send-otp")
-@limiter.limit("5/minute")
 async def send_otp(request: Request, email_req: EmailRequest):
     """Send OTP to email"""
     email = email_req.email
@@ -445,7 +422,6 @@ async def send_otp(request: Request, email_req: EmailRequest):
 
 
 @app.post("/api/auth/verify-otp")
-@limiter.limit("10/minute")
 async def verify_otp(request: Request, otp_data: OTPVerify):
     """Verify OTP code"""
     email = otp_data.email
@@ -469,7 +445,6 @@ async def verify_otp(request: Request, otp_data: OTPVerify):
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-@limiter.limit("5/minute")
 async def register(request: Request, user_data: RegisterRequest):
     """Register a new user"""
     # Check if user exists
@@ -523,7 +498,6 @@ async def register(request: Request, user_data: RegisterRequest):
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-@limiter.limit("10/minute")
 async def login(request: Request, credentials: UserLogin):
     """Login and get access token"""
     response = supabase.table("users").select("*").eq("email", credentials.email).execute()
@@ -536,14 +510,6 @@ async def login(request: Request, credentials: UserLogin):
     if not pwd_context.verify(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Auto-upgrade password hash to Argon2 if it's using the old sha256_crypt scheme
-    if pwd_context.needs_update(user["password_hash"]):
-        try:
-            new_hash = pwd_context.hash(credentials.password)
-            supabase.table("users").update({"password_hash": new_hash}).eq("email", credentials.email).execute()
-        except Exception as e:
-            print(f"Failed to upgrade hash for {credentials.email}: {e}")
-            
     access_token = create_access_token({"sub": user["email"]})
     
     return {
@@ -558,7 +524,6 @@ async def login(request: Request, credentials: UserLogin):
 
 
 @app.post("/api/auth/forgot-password")
-@limiter.limit("3/minute")
 async def forgot_password(request: Request, request_data: ForgotPasswordRequest):
     """Generate reset OTP and send email"""
     email = request_data.email
@@ -610,7 +575,6 @@ async def forgot_password(request: Request, request_data: ForgotPasswordRequest)
 
 
 @app.post("/api/auth/reset-password")
-@limiter.limit("3/minute")
 async def reset_password(request: Request, request_data: ResetPasswordRequest):
     """Verify OTP and update password"""
     email = request_data.email
@@ -628,11 +592,11 @@ async def reset_password(request: Request, request_data: ResetPasswordRequest):
         save_otp_storage(otp_storage)
         raise HTTPException(status_code=400, detail="OTP expired")
         
-    if stored_data["otp"] != request.otp:
+    if stored_data["otp"] != request_data.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
     # Valid OTP, update password
-    new_hash = pwd_context.hash(request.new_password)
+    new_hash = pwd_context.hash(request_data.new_password)
     
     try:
         response = supabase.table("users").update({"password_hash": new_hash}).eq("email", email).execute()

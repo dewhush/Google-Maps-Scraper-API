@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -570,7 +570,10 @@ async def login_compat(credentials: UserLogin):
     return await login(credentials)
 
 @app.post("/auth/token", response_model=TokenResponse)
-async def token_compat(credentials: UserLogin):
+async def token_compat(form_data: OAuth2PasswordRequestForm = Depends()):
+    # Contract specifies form-data with username/password
+    # Map username -> email
+    credentials = UserLogin(email=form_data.username, password=form_data.password)
     return await login(credentials)
 
 @app.post("/auth/register", response_model=TokenResponse)
@@ -903,15 +906,20 @@ async def get_scrape_status(current_user: dict = Depends(get_current_user)):
 async def download_json(current_user: dict = Depends(get_current_user)):
     """Download contacts as JSON file (protected)"""
     user_id = current_user["id"]
-    data_file = f"data_{user_id}.json"
     
-    if not os.path.exists(data_file):
-        raise HTTPException(status_code=404, detail="No data file found")
+    # Fetch from Supabase
+    response = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+    contacts = response.data
     
-    return FileResponse(
-        data_file,
+    if not contacts:
+        raise HTTPException(status_code=404, detail="No contacts to download")
+    
+    json_str = json.dumps({"contacts": contacts}, indent=2, default=str)
+    
+    return Response(
+        content=json_str,
         media_type="application/json",
-        filename=f"leadmaps_contacts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        headers={"Content-Disposition": f"attachment; filename=leadmaps_contacts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"}
     )
 
 @app.get("/api/download/csv")
@@ -921,21 +929,18 @@ async def download_csv(current_user: dict = Depends(get_current_user)):
     import io
     
     user_id = current_user["id"]
-    data_file = f"data_{user_id}.json"
     
-    if not os.path.exists(data_file):
-        raise HTTPException(status_code=404, detail="No data file found")
-
-    # Convert JSON to CSV on the fly
-    with open(data_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        contacts = data.get("contacts", [])
+    # Fetch from Supabase
+    response = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+    contacts = response.data
 
     if not contacts:
         raise HTTPException(status_code=404, detail="No contacts to download")
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=contacts[0].keys())
+    # Use keys from first contact
+    fieldnames = contacts[0].keys()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     writer.writerows(contacts)
     
@@ -945,6 +950,29 @@ async def download_csv(current_user: dict = Depends(get_current_user)):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=leadmaps_contacts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"}
     )
+
+
+# --- More Compatibility Routes ---
+@app.get("/contacts", response_model=ContactsListResponse)
+async def contacts_compat(current_user: dict = Depends(get_current_user)):
+    return await get_contacts(current_user)
+
+@app.post("/scrape", response_model=ScrapeResponse)
+async def scrape_compat(request: ScrapeRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    return await start_scraping(request, background_tasks, current_user)
+
+@app.get("/scrape/status", response_model=StatusResponse)
+async def scrape_status_compat(current_user: dict = Depends(get_current_user)):
+    return await get_scrape_status(current_user)
+
+@app.get("/download/json")
+async def dl_json_compat(current_user: dict = Depends(get_current_user)):
+    return await download_json(current_user)
+
+@app.get("/download/csv")
+async def dl_csv_compat(current_user: dict = Depends(get_current_user)):
+    return await download_csv(current_user)
+# -------------------------------
 
 
 

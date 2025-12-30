@@ -2,7 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS scrape_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
     query TEXT NOT NULL,
     location TEXT,
     results_count INTEGER DEFAULT 0,

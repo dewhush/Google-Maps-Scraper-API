@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mjohuncbzgzfpyohksex.supabase.co")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mjohuncbzqzfpyohksex.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_KEY:

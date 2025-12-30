@@ -45,6 +45,11 @@ from main import GoogleMapsCrawler
 # Password hashing (using sha256_crypt for better Windows compatibility)
 pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
+# JWT Configuration
+SECRET_KEY = os.getenv("SECRET_KEY", "leadmaps-super-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+
 # Security
 security = HTTPBearer()
 
@@ -196,6 +201,18 @@ def save_users(data: dict):
     """Save users to JSON file"""
     with open(USERS_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create a JWT access token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:

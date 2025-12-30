@@ -947,7 +947,32 @@ async def get_scrape_status(current_user: dict = Depends(get_current_user)):
     """Get current scraping job status (protected)"""
     return StatusResponse(**scraping_state)
 
-# ... (stop_scraping endpoint remains same) ...
+@app.post("/api/scrape/stop")
+async def stop_scraping(current_user: dict = Depends(get_current_user)):
+    """Stop the current scraping job (protected)"""
+    global active_crawler
+    
+    if not scraping_state["is_running"]:
+        return {"message": "No scraping job is currently running"}
+    
+    update_state(
+        is_running=False,
+        status="Stopping..."
+    )
+    
+    if active_crawler:
+        try:
+            await active_crawler.close()
+        except:
+            pass
+        active_crawler = None
+        
+    return {"message": "Scraping stop command sent"}
+
+# Compatibility route for stop
+@app.post("/scrape/stop")
+async def stop_compat(current_user: dict = Depends(get_current_user)):
+    return await stop_scraping(current_user)
 
 @app.get("/api/download/json")
 async def download_json(current_user: dict = Depends(get_current_user_token)):

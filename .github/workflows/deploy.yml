@@ -1,0 +1,31 @@
+name: Deploy to Ubuntu Server
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allows manual triggering from GitHub UI
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}     # Your Server IP
+          username: ${{ secrets.SERVER_USER }} # Your Server Username (e.g., ubuntu or root)
+          key: ${{ secrets.SERVER_SSH_KEY }}   # Your Private Key content
+          # password: ${{ secrets.SERVER_PASSWORD }} # Use this if you don't have SSH keys
+          port: 22
+          script: |
+            echo "Connecting to server..."
+            # Navigate to your project folder (Adjust this path if different!)
+            # We try to find the directory automatically if it's in the home folder
+            cd ~/Backend-Lead-Maps || cd ~/Backend-Lead-Maps-main || cd ~/dewhush/Back-End-Lead-Maps || echo "Directory not found, staying in home"
+            
+            # Make the deploy script executable just in case
+            chmod +x deploy.sh
+            
+            # Run the deployment script
+            ./deploy.sh

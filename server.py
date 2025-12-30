@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordRequestForm
@@ -193,6 +193,9 @@ def save_users(data: dict):
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Dependency to get current authenticated user"""
     token = credentials.credentials
+    return verify_token(token)
+
+def verify_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -209,6 +212,17 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return response.data[0] # Return the user dict
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+def get_current_user_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    token: Optional[str] = Query(None)
+) -> dict:
+    """Get active user from Header OR Query param (for downloads)"""
+    if credentials:
+        return verify_token(credentials.credentials)
+    if token:
+        return verify_token(token)
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 # ==================== AUTH ENDPOINTS ====================
@@ -667,6 +681,7 @@ class ContactResponse(BaseModel):
     website: Optional[str] = None
     hours: Optional[str] = None
     description: Optional[str] = None
+    coordinates: Optional[dict] = None
 
 
 class ContactsListResponse(BaseModel):
@@ -888,7 +903,8 @@ async def get_contacts(current_user: dict = Depends(get_current_user)):
             "verified": c.get("verified", False),
             "website": c.get("website", "") or "",
             "hours": c.get("hours", "") or "",
-            "description": c.get("description", "") or ""
+            "description": c.get("description", "") or "",
+            "coordinates": c.get("raw_data", {}).get("coordinates", {"lat": 0, "lng": 0})
         })
             
     return {"contacts": result, "total": len(result)}
@@ -903,7 +919,7 @@ async def get_scrape_status(current_user: dict = Depends(get_current_user)):
 # ... (stop_scraping endpoint remains same) ...
 
 @app.get("/api/download/json")
-async def download_json(current_user: dict = Depends(get_current_user)):
+async def download_json(current_user: dict = Depends(get_current_user_token)):
     """Download contacts as JSON file (protected)"""
     user_id = current_user["id"]
     
@@ -923,7 +939,7 @@ async def download_json(current_user: dict = Depends(get_current_user)):
     )
 
 @app.get("/api/download/csv")
-async def download_csv(current_user: dict = Depends(get_current_user)):
+async def download_csv(current_user: dict = Depends(get_current_user_token)):
     """Download contacts as CSV file (protected)"""
     import csv
     import io
@@ -966,11 +982,11 @@ async def scrape_status_compat(current_user: dict = Depends(get_current_user)):
     return await get_scrape_status(current_user)
 
 @app.get("/download/json")
-async def dl_json_compat(current_user: dict = Depends(get_current_user)):
+async def dl_json_compat(current_user: dict = Depends(get_current_user_token)):
     return await download_json(current_user)
 
 @app.get("/download/csv")
-async def dl_csv_compat(current_user: dict = Depends(get_current_user)):
+async def dl_csv_compat(current_user: dict = Depends(get_current_user_token)):
     return await download_csv(current_user)
 # -------------------------------
 

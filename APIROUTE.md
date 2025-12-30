@@ -128,9 +128,13 @@ Track and retrieve past scraping results.
 ### Download JSON
 `GET /download/json`
 - **Auth Required**: Yes
-- **Query Param Support**: `?token=YOUR_TOKEN`
+- **Query Params**:
+  - `token`: (optional) Bearer token
+  - `history_id`: (optional) ID of the session to export. If omitted, downloads ALL user leads.
 
 ### Download CSV
 `GET /download/csv`
 - **Auth Required**: Yes
-- **Query Param Support**: `?token=YOUR_TOKEN`
+- **Query Params**:
+  - `token`: (optional) Bearer token
+  - `history_id`: (optional) ID of the session to export. If omitted, downloads ALL user leads.

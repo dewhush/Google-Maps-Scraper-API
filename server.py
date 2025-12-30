@@ -1159,37 +1159,77 @@ async def stop_compat(current_user: dict = Depends(get_current_user_token)):
     return await stop_scraping(current_user)
 
 @app.get("/api/download/json")
-async def download_json(current_user: dict = Depends(get_current_user_token)):
-    """Download contacts as JSON file (protected)"""
+async def download_json(
+    history_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user_token)
+):
+    """Download contacts as JSON file - optionally filtered by history_id (protected)"""
     user_id = current_user["id"]
     
-    # Fetch from Supabase
-    response = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
-    contacts = response.data
+    contacts = []
+    filename_prefix = "leadmaps_all_contacts"
+    
+    if history_id:
+        # Fetch specific leads from history
+        hist_resp = supabase.table("scrape_history").select("leads").eq("id", history_id).eq("user_id", user_id).execute()
+        if not hist_resp.data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        lead_ids = hist_resp.data[0].get("leads", [])
+        if not lead_ids:
+            raise HTTPException(status_code=404, detail="No contacts found for this session")
+            
+        contacts_resp = supabase.table("contacts").select("*").in_("id", lead_ids).execute()
+        contacts = contacts_resp.data
+        filename_prefix = f"leadmaps_session_{history_id[:8]}"
+    else:
+        # Fetch all contacts for user
+        contacts_resp = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+        contacts = contacts_resp.data
     
     if not contacts:
         raise HTTPException(status_code=404, detail="No contacts to download")
     
     json_str = json.dumps({"contacts": contacts}, indent=2, default=str)
     
+    filename = f"{filename_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     return Response(
         content=json_str,
         media_type="application/json",
-        headers={"Content-Disposition": f"attachment; filename=leadmaps_contacts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"}
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
 @app.get("/api/download/csv")
-async def download_csv(current_user: dict = Depends(get_current_user_token)):
-    """Download contacts as CSV file (protected)"""
+async def download_csv(
+    history_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user_token)
+):
+    """Download contacts as CSV file - optionally filtered by history_id (protected)"""
     import csv
     import io
     
     user_id = current_user["id"]
+    contacts = []
+    filename_prefix = "leadmaps_all_contacts"
     
-    # Fetch from Supabase
-    response = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
-    contacts = response.data
-
+    if history_id:
+        # Fetch specific leads from history
+        hist_resp = supabase.table("scrape_history").select("leads").eq("id", history_id).eq("user_id", user_id).execute()
+        if not hist_resp.data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        lead_ids = hist_resp.data[0].get("leads", [])
+        if not lead_ids:
+            raise HTTPException(status_code=404, detail="No contacts found for this session")
+            
+        contacts_resp = supabase.table("contacts").select("*").in_("id", lead_ids).execute()
+        contacts = contacts_resp.data
+        filename_prefix = f"leadmaps_session_{history_id[:8]}"
+    else:
+        # Fetch all contacts for user
+        contacts_resp = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+        contacts = contacts_resp.data
+    
     if not contacts:
         raise HTTPException(status_code=404, detail="No contacts to download")
 
@@ -1201,10 +1241,11 @@ async def download_csv(current_user: dict = Depends(get_current_user_token)):
     writer.writerows(contacts)
     
     output.seek(0)
+    filename = f"{filename_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(
         content=output.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=leadmaps_contacts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"}
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
 
@@ -1241,12 +1282,18 @@ async def history_delete_compat(history_id: str, current_user: dict = Depends(ge
     return await delete_history(history_id, current_user)
 
 @app.get("/download/json")
-async def dl_json_compat(current_user: dict = Depends(get_current_user_token)):
-    return await download_json(current_user)
+async def dl_json_compat(
+    history_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user_token)
+):
+    return await download_json(history_id, current_user)
 
 @app.get("/download/csv")
-async def dl_csv_compat(current_user: dict = Depends(get_current_user_token)):
-    return await download_csv(current_user)
+async def dl_csv_compat(
+    history_id: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user_token)
+):
+    return await download_csv(history_id, current_user)
 # -------------------------------
 
 

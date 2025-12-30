@@ -728,6 +728,13 @@ class StatusResponse(BaseModel):
     error: Optional[str]
 
 
+class DashboardStatsResponse(BaseModel):
+    total_leads: int
+    this_month: int
+    total_exports: int
+    last_activity: Optional[str] = "Never"
+
+
 def update_state(**kwargs):
     """Update scraping state (async-safe since we're single-threaded in asyncio)"""
     for key, value in kwargs.items():
@@ -837,9 +844,7 @@ async def run_scraper(query: str, max_results: int, headless: bool, user_id: int
                         "website": result.get("website", ""),
                         "hours": result.get("hours", ""),
                         "description": "",
-                        "lat": result.get("lat"),
-                        "lng": result.get("lng"),
-                        "raw_data": result
+                        "raw_data": result  # Keep details like lat/lng here
                     }
                     
                     supabase.table("contacts").insert(new_contact).execute()
@@ -946,6 +951,49 @@ async def get_contacts(current_user: dict = Depends(get_current_user)):
 async def get_scrape_status(current_user: dict = Depends(get_current_user)):
     """Get current scraping job status (protected)"""
     return StatusResponse(**scraping_state)
+
+
+@app.get("/api/dashboard/stats", response_model=DashboardStatsResponse)
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    """Get dashboard overview statistics (protected)"""
+    user_id = current_user["id"]
+    
+    try:
+        # 1. Total Leads
+        total_resp = supabase.table("contacts").select("*", count="exact", head=True).eq("user_id", user_id).execute()
+        total_leads = total_resp.count or 0
+        
+        # 2. Leads This Month
+        first_of_month = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+        month_resp = supabase.table("contacts").select("*", count="exact", head=True).eq("user_id", user_id).gte("created_at", first_of_month).execute()
+        this_month = month_resp.count or 0
+        
+        # 3. Last Activity (Latest contact)
+        last_resp = supabase.table("contacts").select("business_name, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        
+        last_activity = "Never"
+        if last_resp.data:
+            last_activity = f"Scraped {last_resp.data[0]['business_name']}"
+            
+        return {
+            "total_leads": total_leads,
+            "this_month": this_month,
+            "total_exports": 0, # Could track in a separate table later
+            "last_activity": last_activity
+        }
+    except Exception as e:
+        print(f"Stats error: {e}")
+        return {
+            "total_leads": 0,
+            "this_month": 0,
+            "total_exports": 0,
+            "last_activity": "Error fetching stats"
+        }
+
+# Compatibility route for dashboard
+@app.get("/dashboard/stats", response_model=DashboardStatsResponse)
+async def dashboard_stats_compat(current_user: dict = Depends(get_current_user)):
+    return await get_dashboard_stats(current_user)
 
 @app.post("/api/scrape/stop")
 async def stop_scraping(current_user: dict = Depends(get_current_user)):

@@ -70,8 +70,9 @@ class GoogleMapsCrawler:
         ]
     
     def setup_driver(self):
-        """Setup Chrome driver with options - works on both local and Render hosting"""
+        """Setup Chrome driver with options - works on local, Render, and Ubuntu VPS"""
         is_render = os.environ.get("RENDER") is not None
+        is_ubuntu_vps = os.path.exists("/snap/bin/chromium")  # Detect snap chromium on Ubuntu
         
         if is_render:
             # Render.com hosting - use pre-installed Chrome and ChromeDriver
@@ -105,6 +106,36 @@ class GoogleMapsCrawler:
             
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             print("[OK] Chrome driver initialized on Render")
+            
+        elif is_ubuntu_vps:
+            # Ubuntu VPS with snap chromium
+            print("[INFO] Detected Ubuntu VPS with snap chromium")
+            chrome_options = Options()
+            
+            if self.headless:
+                chrome_options.add_argument("--headless=new")
+            
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--disable-notifications")
+            chrome_options.add_argument("--disable-popup-blocking")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            
+            # Use snap chromium binary
+            chrome_options.binary_location = "/snap/bin/chromium"
+            
+            user_agents = [
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+            ]
+            chrome_options.add_argument(f'user-agent={random.choice(user_agents)}')
+            
+            # Use system chromedriver
+            service = Service("/usr/bin/chromedriver")
+            
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            print("[OK] Chrome driver initialized on Ubuntu VPS")
             
         else:
             # Local development - use undetected-chromedriver

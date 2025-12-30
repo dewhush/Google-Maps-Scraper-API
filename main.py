@@ -138,60 +138,39 @@ class GoogleMapsCrawler:
             print("[OK] Chrome driver initialized on Ubuntu VPS")
             
         else:
-            # Local development - use undetected-chromedriver
+            # Local development - use webdriver-manager (more reliable)
             print("[INFO] Local development environment")
-            try:
-                import undetected_chromedriver as uc
-                
-                options = uc.ChromeOptions()
-                
-                if self.headless:
-                    options.add_argument("--headless=new")
-                
-                options.add_argument("--window-size=1920,1080")
-                options.add_argument("--disable-notifications")
-                options.add_argument("--disable-popup-blocking")
-                options.add_argument("--disable-gpu")
-                options.add_argument("--no-sandbox")
-                options.add_argument("--disable-dev-shm-usage")
-                
-                self.driver = uc.Chrome(options=options, use_subprocess=True)
-                print("[OK] Using undetected-chromedriver")
-                
-            except Exception as e:
-                print(f"[!] undetected-chromedriver failed: {e}")
-                print("[...] Falling back to standard Selenium with webdriver-manager...")
-                
-                chrome_options = Options()
-                
-                if self.headless:
-                    chrome_options.add_argument("--headless=new")
-                
-                chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-                chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-                chrome_options.add_experimental_option('useAutomationExtension', False)
-                chrome_options.add_argument("--window-size=1920,1080")
-                chrome_options.add_argument("--disable-notifications")
-                chrome_options.add_argument("--disable-popup-blocking")
-                chrome_options.add_argument("--disable-gpu")
-                chrome_options.add_argument("--no-sandbox")
-                chrome_options.add_argument("--disable-dev-shm-usage")
-                
-                user_agents = [
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                ]
-                chrome_options.add_argument(f'user-agent={random.choice(user_agents)}')
-                
-                from webdriver_manager.chrome import ChromeDriverManager
-                service = Service(ChromeDriverManager().install())
-                
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
-                
-                self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-                    "userAgent": user_agents[0]
-                })
-                self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                print("[OK] Using standard Selenium with webdriver-manager")
+            
+            chrome_options = Options()
+            
+            if self.headless:
+                chrome_options.add_argument("--headless=new")
+            
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--disable-notifications")
+            chrome_options.add_argument("--disable-popup-blocking")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            ]
+            chrome_options.add_argument(f'user-agent={random.choice(user_agents)}')
+            
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": user_agents[0]
+            })
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            print("[OK] Using Selenium with webdriver-manager")
         
         self.wait = WebDriverWait(self.driver, 15)
         return self.driver

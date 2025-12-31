@@ -1014,7 +1014,52 @@ async def start_scraping(
     
     user_id = current_user["id"]
     
-    # 1. Create History Record First
+    # === ARCHIVE EXISTING CONTACTS BEFORE NEW EXTRACTION ===
+    try:
+        existing_contacts = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+        
+        if existing_contacts.data and len(existing_contacts.data) > 0:
+            # Get the last history record for this user
+            last_history = supabase.table("scrape_history") \
+                .select("id, leads") \
+                .eq("user_id", user_id) \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
+            
+            if last_history.data:
+                # Embed full contact data into leads column (archived)
+                contacts_to_archive = [
+                    {
+                        "id": str(c["id"]),
+                        "business_name": c.get("business_name", ""),
+                        "phone": c.get("phone", ""),
+                        "address": c.get("address", ""),
+                        "rating": float(c.get("rating", 0) or 0),
+                        "reviews": int(c.get("reviews", 0) or 0),
+                        "category": c.get("category", ""),
+                        "website": c.get("website", ""),
+                        "hours": c.get("hours", ""),
+                        "verified": c.get("verified", False),
+                        "description": c.get("description", "")
+                    }
+                    for c in existing_contacts.data
+                ]
+                
+                supabase.table("scrape_history").update({
+                    "leads": contacts_to_archive,
+                    "results_count": len(contacts_to_archive)
+                }).eq("id", last_history.data[0]["id"]).execute()
+                
+                print(f"📦 Archived {len(contacts_to_archive)} contacts to history {last_history.data[0]['id']}")
+            
+            # Delete old contacts from contacts table
+            supabase.table("contacts").delete().eq("user_id", user_id).execute()
+            print(f"🗑️ Cleared contacts table for user {user_id}")
+    except Exception as e:
+        print(f"⚠️ Archive warning (non-fatal): {e}")
+    
+    # === CREATE NEW HISTORY RECORD ===
     history_resp = supabase.table("scrape_history").insert({
         "user_id": user_id,
         "query": request.query,
@@ -1064,14 +1109,36 @@ async def get_contacts(
         if not hist_resp.data:
             return {"contacts": [], "total": 0}
         
-        lead_ids = hist_resp.data[0].get("leads", [])
-        if not lead_ids:
+        leads = hist_resp.data[0].get("leads", [])
+        if not leads:
             return {"contacts": [], "total": 0}
-            
-        contacts_resp = supabase.table("contacts").select("*").in_("id", lead_ids).execute()
-        contacts = contacts_resp.data
+        
+        # Check if leads is embedded data (objects) or legacy (IDs)
+        if isinstance(leads[0], dict):
+            # New format: embedded contact data - return directly
+            result = []
+            for c in leads:
+                result.append({
+                    "id": str(c.get("id", "")),
+                    "business_name": c.get("business_name", ""),
+                    "phone": c.get("phone", ""),
+                    "address": c.get("address", "") or "",
+                    "rating": float(c.get("rating", 0) or 0.0),
+                    "reviews": int(c.get("reviews", 0) or 0),
+                    "category": c.get("category", "") or "",
+                    "verified": c.get("verified", False),
+                    "website": c.get("website", "") or "",
+                    "hours": c.get("hours", "") or "",
+                    "description": c.get("description", "") or "",
+                    "coordinates": c.get("coordinates", {"lat": 0, "lng": 0})
+                })
+            return {"contacts": result, "total": len(result)}
+        else:
+            # Legacy format: fetch from contacts table using IDs
+            contacts_resp = supabase.table("contacts").select("*").in_("id", leads).execute()
+            contacts = contacts_resp.data
     else:
-        # Fetch all contacts for user
+        # Fetch all contacts for user (current extraction)
         contacts_resp = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
         contacts = contacts_resp.data
     
@@ -1158,13 +1225,19 @@ async def get_history_detail(history_id: str, current_user: dict = Depends(get_c
         raise HTTPException(status_code=404, detail="History record not found")
     
     history_data = history_resp.data[0]
-    lead_ids = history_data.get("leads", [])
+    leads = history_data.get("leads", [])
     
-    # 2. Fetch associated contacts
+    # 2. Handle both embedded contacts and legacy ID references
     contacts = []
-    if lead_ids:
-        contacts_resp = supabase.table("contacts").select("*").in_("id", lead_ids).execute()
-        contacts = contacts_resp.data
+    if leads:
+        # Check if leads contains embedded objects (new format) or IDs (legacy)
+        if isinstance(leads[0], dict):
+            # New format: leads contains full contact data
+            contacts = leads
+        else:
+            # Legacy format: leads contains IDs - fetch from contacts table
+            contacts_resp = supabase.table("contacts").select("*").in_("id", leads).execute()
+            contacts = contacts_resp.data or []
         
     return {
         "id": history_data["id"],

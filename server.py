@@ -41,6 +41,8 @@ print("=" * 60)
 from database import supabase
 # Use async Playwright scraper instead of Selenium
 from scraper_async import AsyncGoogleMapsCrawler
+# Telegram monitoring bot
+from telegram_bot import traffic_monitor, send_alert, telegram_webhook_handler
 
 # Rate Limiter setup
 limiter = Limiter(key_func=get_remote_address)
@@ -105,6 +107,19 @@ async def secure_middleware(request: Request, call_next):
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none';"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    # 5. Log traffic to Telegram monitor
+    try:
+        should_alert = traffic_monitor.log_request(
+            ip=client_ip,
+            endpoint=path,
+            method=request.method,
+            status_code=response.status_code
+        )
+        if should_alert:
+            asyncio.create_task(send_alert("rate_limit", {"ip": client_ip, "count": traffic_monitor.requests_per_ip[client_ip]}))
+    except:
+        pass
     
     return response
 
@@ -1009,6 +1024,39 @@ async def root():
         "version": "2.0.0",
         "status": "running",
         "docs": "/docs"
+    }
+
+
+# ==================== TELEGRAM BOT ENDPOINTS ====================
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Webhook endpoint for Telegram bot updates"""
+    try:
+        update = await request.json()
+        await telegram_webhook_handler(update)
+        return {"ok": True}
+    except Exception as e:
+        print(f"[TELEGRAM] Webhook error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/monitor/stats")
+async def get_monitor_stats(current_user: dict = Depends(get_current_user)):
+    """Get traffic monitoring statistics (admin only)"""
+    return traffic_monitor.get_stats()
+
+
+@app.get("/api/monitor/scraping")
+async def get_scraping_stats():
+    """Get current scraping status for Telegram bot"""
+    return {
+        "is_running": scraping_state["is_running"],
+        "progress": scraping_state["progress"],
+        "total": scraping_state["total"],
+        "current_query": scraping_state["current_query"],
+        "status": scraping_state["status"],
+        "results_count": scraping_state["results_count"]
     }
 
 

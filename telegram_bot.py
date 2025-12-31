@@ -114,6 +114,101 @@ class TrafficMonitor:
 traffic_monitor = TrafficMonitor()
 
 
+# ==================== CACHE CLEANUP ====================
+
+import shutil
+import glob
+
+async def cleanup_cache() -> dict:
+    """Clean up temporary files and cache to free disk space"""
+    cleaned = {
+        "playwright_temp": 0,
+        "browser_cache": 0,
+        "crash_reports": 0,
+        "log_files": 0,
+        "total_freed_mb": 0
+    }
+    
+    cleanup_paths = [
+        # Playwright temp files
+        ("/tmp/playwright*", "playwright_temp"),
+        # Browser cache
+        ("~/.cache/ms-playwright", "browser_cache"),
+        ("~/.config/chromium/Crash*", "crash_reports"),
+        # Old log files
+        ("/var/log/*.log.1", "log_files"),
+        ("/tmp/core*", "crash_reports"),
+    ]
+    
+    total_freed = 0
+    
+    for pattern, category in cleanup_paths:
+        try:
+            expanded_pattern = os.path.expanduser(pattern)
+            paths = glob.glob(expanded_pattern)
+            
+            for path in paths:
+                try:
+                    if os.path.isdir(path):
+                        size = get_directory_size(path)
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        size = os.path.getsize(path) if os.path.exists(path) else 0
+                        os.remove(path)
+                    
+                    cleaned[category] += 1
+                    total_freed += size
+                except Exception as e:
+                    print(f"[CLEANUP] Error cleaning {path}: {e}")
+        except:
+            pass
+    
+    cleaned["total_freed_mb"] = round(total_freed / (1024 * 1024), 2)
+    
+    print(f"[CLEANUP] Cleaned {cleaned['total_freed_mb']}MB")
+    return cleaned
+
+
+def get_directory_size(path: str) -> int:
+    """Get total size of a directory"""
+    total = 0
+    try:
+        for entry in os.scandir(path):
+            if entry.is_file():
+                total += entry.stat().st_size
+            elif entry.is_dir():
+                total += get_directory_size(entry.path)
+    except:
+        pass
+    return total
+
+
+async def scheduled_cleanup():
+    """Run cleanup every 12 hours and notify via Telegram"""
+    while True:
+        # Wait 12 hours
+        await asyncio.sleep(12 * 60 * 60)  # 12 hours in seconds
+        
+        print("[CLEANUP] Starting scheduled cleanup...")
+        result = await cleanup_cache()
+        
+        # Get disk usage after cleanup
+        try:
+            disk = psutil.disk_usage('/')
+            disk_info = f"{disk.percent}% used ({disk.free // (1024**3)}GB free)"
+        except:
+            disk_info = "Unknown"
+        
+        # Send notification
+        await send_alert("cache_cleanup", {
+            "freed_mb": result["total_freed_mb"],
+            "disk_status": disk_info,
+            "playwright": result["playwright_temp"],
+            "browser_cache": result["browser_cache"],
+            "crash_reports": result["crash_reports"]
+        })
+
+
 # ==================== TELEGRAM BOT FUNCTIONS ====================
 
 async def send_telegram_message(chat_id: str, text: str, reply_markup: dict = None):
@@ -146,7 +241,7 @@ def get_main_keyboard():
         "keyboard": [
             [{"text": "📊 Server Status"}, {"text": "📈 Traffic Stats"}],
             [{"text": "🔒 Security Report"}, {"text": "🔄 Restart Server"}],
-            [{"text": "🕷️ Scraping Status"}, {"text": "🚫 Blocked IPs"}],
+            [{"text": "🕷️ Scraping Status"}, {"text": "🧹 Clean Cache"}],
             [{"text": "📋 Recent Errors"}, {"text": "ℹ️ Help"}]
         ],
         "resize_keyboard": True,
@@ -323,12 +418,33 @@ Welcome! I'll help you monitor your server.
     elif text == "🕷️ Scraping Status":
         response = await get_scraping_status()
     
-    elif text == "🚫 Blocked IPs":
-        blocked = list(traffic_monitor.blocked_ips)
-        if blocked:
-            response = "<b>🚫 Blocked IPs:</b>\n" + "\n".join([f"  • {ip}" for ip in blocked[:20]])
-        else:
-            response = "✅ No blocked IPs"
+    elif text == "🧹 Clean Cache":
+        response = "<b>🧹 Cleaning Cache...</b>\n\nPlease wait..."
+        await send_telegram_message(chat_id, response, get_main_keyboard())
+        
+        # Run cleanup
+        result = await cleanup_cache()
+        
+        # Get disk status
+        try:
+            disk = psutil.disk_usage('/')
+            disk_info = f"{disk.percent}% used ({disk.free // (1024**3)}GB free)"
+        except:
+            disk_info = "Unknown"
+        
+        response = f"""
+<b>🧹 Cache Cleanup Complete!</b>
+
+<b>📊 Cleaned:</b>
+  • Playwright temp: {result['playwright_temp']} files
+  • Browser cache: {result['browser_cache']} files
+  • Crash reports: {result['crash_reports']} files
+
+<b>💾 Freed:</b> {result['total_freed_mb']} MB
+<b>💿 Disk Status:</b> {disk_info}
+
+<i>Auto cleanup runs every 12 hours</i>
+"""
     
     elif text == "📋 Recent Errors":
         errors = traffic_monitor.errors[-10:]
@@ -401,6 +517,22 @@ Consider blocking this IP.
 <b>Status:</b> API is now running
 """
     
+    elif alert_type == "cache_cleanup":
+        message = f"""
+🧹 <b>SCHEDULED CACHE CLEANUP</b>
+
+<b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+<b>Freed:</b> {data.get('freed_mb', 0)} MB
+<b>Disk Status:</b> {data.get('disk_status', 'Unknown')}
+
+<b>Cleaned:</b>
+  • Playwright temp: {data.get('playwright', 0)} files
+  • Browser cache: {data.get('browser_cache', 0)} files
+  • Crash reports: {data.get('crash_reports', 0)} files
+
+<i>Next cleanup in 12 hours</i>
+"""
+    
     else:
         message = f"ℹ️ Alert: {alert_type}\n{data}"
     
@@ -422,9 +554,12 @@ async def telegram_webhook_handler(update: dict):
 async def start_polling():
     """Start polling for updates (for testing without webhook)"""
     print(f"[TELEGRAM] Starting bot polling...")
+    print(f"[TELEGRAM] Admin Chat ID: {ADMIN_CHAT_ID}")
+    print(f"[CLEANUP] Scheduled cleanup will run every 12 hours")
+    
     offset = 0
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         while True:
             try:
                 response = await client.get(
@@ -443,6 +578,25 @@ async def start_polling():
                 await asyncio.sleep(5)
 
 
+async def main():
+    """Run both polling and scheduled cleanup"""
+    # Start both tasks concurrently
+    polling_task = asyncio.create_task(start_polling())
+    cleanup_task = asyncio.create_task(scheduled_cleanup())
+    
+    # Send startup notification
+    await send_alert("server_start", {})
+    
+    # Wait for both (they run forever)
+    await asyncio.gather(polling_task, cleanup_task)
+
+
 if __name__ == "__main__":
-    print("Starting Telegram Bot in polling mode...")
-    asyncio.run(start_polling())
+    print("=" * 50)
+    print("LeadMaps Telegram Monitor Bot")
+    print("=" * 50)
+    print(f"Bot Token: {BOT_TOKEN[:20]}...")
+    print(f"Admin Chat: {ADMIN_CHAT_ID}")
+    print("Features: Traffic Monitor, Security Alerts, Cache Cleanup")
+    print("=" * 50)
+    asyncio.run(main())

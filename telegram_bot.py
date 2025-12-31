@@ -336,21 +336,25 @@ async def get_security_report() -> str:
 async def restart_server():
     """Restart the server.py process"""
     try:
-        # This is a placeholder - actual restart logic depends on how server is run
-        # For PM2: subprocess.run(["pm2", "restart", "server"])
-        # For systemd: subprocess.run(["sudo", "systemctl", "restart", "leadmaps"])
+        # Notify user first since process will die
+        await send_telegram_message(ADMIN_CHAT_ID, "<b>🔄 Restarting Server...</b>\n\n<i>This may take a few seconds.</i>")
         
-        return """
-<b>🔄 Server Restart</b>
+        # Give msg time to send
+        await asyncio.sleep(1)
+        
+        # 1. Try PM2 Restart (if running under PM2)
+        # We can check if PM2 env vars exist or just try the command
+        if os.getenv("PM2_HOME") or os.getenv("PM2_USAGE"):
+             print("[RESTART] Attempting PM2 restart...")
+             subprocess.Popen(["pm2", "restart", "server"])
+             return "Restart triggered via PM2"
 
-⚠️ To restart the server, run on VPS:
-<code>pkill -f server.py && python server.py &</code>
-
-Or if using PM2:
-<code>pm2 restart server</code>
-
-<i>Auto-restart not enabled for safety reasons.</i>
-"""
+        # 2. Fallback: Python auto-restart (os.execv)
+        # This replaces the current process with a new one
+        print("[RESTART] Attempting os.execv restart...")
+        python = sys.executable
+        os.execv(python, [python] + sys.argv)
+        
     except Exception as e:
         return f"❌ Restart failed: {str(e)}"
 
@@ -385,23 +389,7 @@ async def handle_telegram_update(update: dict):
     response = ""
     
     if text == "/start" or text == "ℹ️ Help":
-        response = f"""
-<b>🤖 LeadMaps Monitor Bot</b>
-
-Welcome! I'll help you monitor your server.
-
-<b>Available commands:</b>
-📊 Server Status - View system resources
-📈 Traffic Stats - View traffic analytics
-🔒 Security Report - View security alerts
-🔄 Restart Server - Restart the API server
-🕷️ Scraping Status - View scraping progress
-🚫 Blocked IPs - View blocked IP addresses
-📋 Recent Errors - View recent API errors
-
-<b>Your Chat ID:</b> <code>{chat_id}</code>
-<i>Save this ID for TELEGRAM_ADMIN_CHAT_ID env var</i>
-"""
+        response = "Use the buttons below to monitor your server."
     
     elif text == "📊 Server Status":
         response = await get_server_status()

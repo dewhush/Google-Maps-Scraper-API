@@ -16,6 +16,10 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Optional
 import httpx
+from dotenv import load_dotenv
+
+# Load env vars if running standalone
+load_dotenv()
 
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8522429008:AAHAQda0tj4oaR0bd8mFy4kQpm-4ekj_TuQ")
@@ -578,6 +582,13 @@ async def start_polling():
     offset = 0
     
     async with httpx.AsyncClient(timeout=60.0) as client:
+        # Clear any existing webhook to allow polling
+        try:
+            await client.get(f"{TELEGRAM_API}/deleteWebhook")
+            print("[TELEGRAM] Webhook cleared")
+        except Exception as e:
+            print(f"[TELEGRAM] Warning: Could not clear webhook: {e}")
+
         while True:
             try:
                 response = await client.get(

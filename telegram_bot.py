@@ -333,27 +333,33 @@ async def get_security_report() -> str:
 """
 
 
-async def restart_server():
-    """Restart the server.py process"""
+async def _perform_restart():
+    """Actual restart logic with delay"""
+    print("[RESTART] Scheduled restart in 3 seconds...")
+    await asyncio.sleep(3)  # Wait for Telegram ACK
+    
     try:
-        # Notify user first since process will die
-        await send_telegram_message(ADMIN_CHAT_ID, "<b>🔄 Restarting Server...</b>\n\n<i>This may take a few seconds.</i>")
-        
-        # Give msg time to send
-        await asyncio.sleep(1)
-        
-        # 1. Try PM2 Restart (if running under PM2)
-        # We can check if PM2 env vars exist or just try the command
         if os.getenv("PM2_HOME") or os.getenv("PM2_USAGE"):
-             print("[RESTART] Attempting PM2 restart...")
+             print("[RESTART] PM2 restart...")
              subprocess.Popen(["pm2", "restart", "server"])
-             return "Restart triggered via PM2"
+             return
 
-        # 2. Fallback: Python auto-restart (os.execv)
-        # This replaces the current process with a new one
-        print("[RESTART] Attempting os.execv restart...")
+        print("[RESTART] os.execv restart...")
         python = sys.executable
         os.execv(python, [python] + sys.argv)
+    except Exception as e:
+        print(f"❌ Restart failing: {e}")
+
+async def restart_server():
+    """Trigger server restart"""
+    try:
+        # Notify user
+        await send_telegram_message(ADMIN_CHAT_ID, "<b>🔄 Restarting Server...</b>\n\n<i>This may take a few seconds.</i>")
+        
+        # Schedule restart in background so we can return and ACK the message
+        asyncio.create_task(_perform_restart())
+        
+        return "Restart sequence initiated."
         
     except Exception as e:
         return f"❌ Restart failed: {str(e)}"

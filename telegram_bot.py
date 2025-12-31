@@ -19,7 +19,7 @@ import httpx
 
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8522429008:AAHAQda0tj4oaR0bd8mFy4kQpm-4ekj_TuQ")
-ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")  # Set your chat ID
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "5673885457")
 
 # Base URL for Telegram API
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"

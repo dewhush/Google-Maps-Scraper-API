@@ -253,14 +253,24 @@ class AsyncGoogleMapsCrawler:
             rating_str = (place_data["rating"] or "0").replace(",", ".")
             rating_val = float(re.findall(r'\d+\.\d+|\d+', rating_str)[0]) if re.findall(r'\d+\.\d+|\d+', rating_str) else 0.0
             
-            if phone_req and not has_phone: return None
-            if web_req and not place_data["website"]: return None
-            if rating_val < min_rating: return None
+            print(f"[DEBUG] {place_data['name']}: phone={place_data['phone']}, has_phone={has_phone}, phone_req={phone_req}, rating={rating_val}")
+            
+            if phone_req and not has_phone:
+                print(f"[FILTER] REJECTED: {place_data['name']} - No phone number")
+                return None
+            if web_req and not place_data["website"]:
+                print(f"[FILTER] REJECTED: {place_data['name']} - No website")
+                return None
+            if rating_val < min_rating:
+                print(f"[FILTER] REJECTED: {place_data['name']} - Rating {rating_val} < {min_rating}")
+                return None
             
             # Clean Phone
             if has_phone:
                 place_data["phone"] = self._clean_phone_number(place_data["phone"])
-                if not place_data["phone"] and phone_req: return None
+                if not place_data["phone"] and phone_req:
+                    print(f"[FILTER] REJECTED: {place_data['name']} - Phone cleaned to empty")
+                    return None
             
             print(f"[OK] {place_data['name']} | {place_data['phone']}")
             self.results.append(place_data)

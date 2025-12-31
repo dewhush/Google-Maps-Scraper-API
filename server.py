@@ -935,25 +935,36 @@ async def run_scraper(
                             "raw_data": result
                         }
                         
-                        save_resp = supabase.table("contacts").insert(new_contact).execute()
-                        if save_resp.data:
-                            contact_id = save_resp.data[0]["id"]
-                            found_contact_ids.append(contact_id)
-                            
-                            # 1. Update live count
-                            update_state(results_count=len(found_contact_ids))
-                            
-                            # 2. Update status text
-                            update_state(status=f"Scraped {len(found_contact_ids)}/{total_places}: {result.get('name', 'Unknown')[:20]}...")
-                            
-                            # 3. Update history (Every 5 results to save DB overhead)
-                            if history_id and len(found_contact_ids) % 5 == 0:
-                                supabase.table("scrape_history").update({
-                                    "results_count": len(found_contact_ids),
-                                    "leads": found_contact_ids
-                                }).eq("id", history_id).execute()
+                        print(f"💾 [INSERT] Attempting to save: {new_contact['business_name']} for user_id: {user_id}")
+                        try:
+                            save_resp = supabase.table("contacts").insert(new_contact).execute()
+                            print(f"💾 [INSERT] Response: {save_resp.data}")
+                            if save_resp.data:
+                                contact_id = save_resp.data[0]["id"]
+                                found_contact_ids.append(contact_id)
+                                
+                                # 1. Update live count
+                                update_state(results_count=len(found_contact_ids))
+                                
+                                # 2. Update status text
+                                update_state(status=f"Scraped {len(found_contact_ids)}/{total_places}: {result.get('name', 'Unknown')[:20]}...")
+                                
+                                # 3. Update history (Every 5 results to save DB overhead)
+                                if history_id and len(found_contact_ids) % 5 == 0:
+                                    supabase.table("scrape_history").update({
+                                        "results_count": len(found_contact_ids),
+                                        "leads": found_contact_ids
+                                    }).eq("id", history_id).execute()
+                            else:
+                                print(f"❌ [INSERT] No data returned for {new_contact['business_name']}")
+                        except Exception as insert_error:
+                            print(f"❌ [INSERT] Failed for {new_contact['business_name']}: {insert_error}")
+                    else:
+                        print(f"⚠️ [SCRAPE] No result returned for {place_url.get('name', 'Unknown')}")
                 except Exception as e:
-                    print(f"Error scraping {place_url.get('name', 'Unknown')}: {e}")
+                    print(f"❌ [SCRAPE] Error scraping {place_url.get('name', 'Unknown')}: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         # Run detail scrapers concurrently
         tasks = [scrape_and_save(url, i) for i, url in enumerate(all_place_urls)]

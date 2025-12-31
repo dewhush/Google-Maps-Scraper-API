@@ -1015,8 +1015,11 @@ async def start_scraping(
     user_id = current_user["id"]
     
     # === ARCHIVE EXISTING CONTACTS BEFORE NEW EXTRACTION ===
+    print(f"🔍 [ARCHIVE] Checking existing contacts for user_id: {user_id} (type: {type(user_id).__name__})")
     try:
+        # Try both int and string user_id for compatibility
         existing_contacts = supabase.table("contacts").select("*").eq("user_id", user_id).execute()
+        print(f"🔍 [ARCHIVE] Found {len(existing_contacts.data) if existing_contacts.data else 0} existing contacts")
         
         if existing_contacts.data and len(existing_contacts.data) > 0:
             # Get the last history record for this user
@@ -1026,6 +1029,8 @@ async def start_scraping(
                 .order("created_at", desc=True) \
                 .limit(1) \
                 .execute()
+            
+            print(f"🔍 [ARCHIVE] Last history found: {last_history.data[0]['id'] if last_history.data else 'None'}")
             
             if last_history.data:
                 # Embed full contact data into leads column (archived)
@@ -1046,18 +1051,23 @@ async def start_scraping(
                     for c in existing_contacts.data
                 ]
                 
-                supabase.table("scrape_history").update({
+                update_result = supabase.table("scrape_history").update({
                     "leads": contacts_to_archive,
                     "results_count": len(contacts_to_archive)
                 }).eq("id", last_history.data[0]["id"]).execute()
                 
-                print(f"📦 Archived {len(contacts_to_archive)} contacts to history {last_history.data[0]['id']}")
+                print(f"📦 [ARCHIVE] Archived {len(contacts_to_archive)} contacts to history {last_history.data[0]['id']}")
+                print(f"📦 [ARCHIVE] Update result: {update_result.data}")
             
             # Delete old contacts from contacts table
-            supabase.table("contacts").delete().eq("user_id", user_id).execute()
-            print(f"🗑️ Cleared contacts table for user {user_id}")
+            delete_result = supabase.table("contacts").delete().eq("user_id", user_id).execute()
+            print(f"🗑️ [ARCHIVE] Deleted contacts for user {user_id}: {delete_result.data}")
+        else:
+            print(f"ℹ️ [ARCHIVE] No existing contacts to archive for user {user_id}")
     except Exception as e:
-        print(f"⚠️ Archive warning (non-fatal): {e}")
+        print(f"⚠️ [ARCHIVE] Error (non-fatal): {e}")
+        import traceback
+        traceback.print_exc()
     
     # === CREATE NEW HISTORY RECORD ===
     history_resp = supabase.table("scrape_history").insert({

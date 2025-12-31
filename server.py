@@ -89,12 +89,19 @@ async def secure_middleware(request: Request, call_next):
         ".php", ".env", ".git", "xmlrpc", "wp-admin", 
         "xdebug", "shell", "eval", "config", "backup",
         "mysql", "setup", ".cgi", ".sh", ".sql", 
-        "node_modules", ".zip", ".rar", ".exe", ".bak"
+        "node_modules", ".zip", ".rar", ".exe", ".bak",
+        "autodiscover", "powershell", "aspx", "jsp"
     ]
     
     if any(pattern in path or pattern in query for pattern in blocked_patterns):
         log_security_event("BOT_SCAN", f"Attempted access to {path}", client_ip)
         print(f"🛑 [SECURITY BLOCK]: {client_ip} tried {path}")
+        # Send Telegram alert for security block
+        asyncio.create_task(send_alert("security_block", {
+            "ip": client_ip,
+            "path": path,
+            "query": query[:100] if query else ""
+        }))
         return Response(status_code=403, content="Access Denied: Security Violation")
         
     # 3. Process the request

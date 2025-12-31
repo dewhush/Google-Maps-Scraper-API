@@ -480,6 +480,18 @@ async def send_alert(alert_type: str, data: dict):
 Consider blocking this IP.
 """
     
+    elif alert_type == "security_block":
+        message = f"""
+🛑 <b>SECURITY BLOCK</b>
+
+<b>IP:</b> <code>{data.get('ip', 'unknown')}</code>
+<b>Path:</b> <code>{data.get('path', 'unknown')}</code>
+<b>Query:</b> {data.get('query', '')[:50]}
+<b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+<i>Attacker/Bot scanner blocked</i>
+"""
+    
     elif alert_type == "brute_force":
         message = f"""
 🚨 <b>BRUTE FORCE ALERT</b>

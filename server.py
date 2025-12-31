@@ -42,7 +42,8 @@ from database import supabase
 # Use async Playwright scraper instead of Selenium
 from scraper_async import AsyncGoogleMapsCrawler
 # Telegram monitoring bot
-from telegram_bot import traffic_monitor, send_alert, telegram_webhook_handler
+from telegram_bot import traffic_monitor, send_alert, telegram_webhook_handler, scheduled_cleanup, start_polling
+from contextlib import asynccontextmanager
 
 # Rate Limiter setup
 limiter = Limiter(key_func=get_remote_address)
@@ -61,10 +62,31 @@ security = HTTPBearer(auto_error=False)
 # Users storage file
 USERS_FILE = "users.json"
 
+
+# Lifespan for startup/shutdown events
+@asynccontextmanager
+async def lifespan(app):
+    # Startup: Start telegram bot tasks in background
+    print("[TELEGRAM] Starting bot background tasks...")
+    telegram_polling_task = asyncio.create_task(start_polling())
+    telegram_cleanup_task = asyncio.create_task(scheduled_cleanup())
+    # Send startup notification
+    asyncio.create_task(send_alert("server_start", {}))
+    print("[TELEGRAM] Bot started - Polling & Scheduled Cleanup active")
+    
+    yield
+    
+    # Shutdown
+    telegram_polling_task.cancel()
+    telegram_cleanup_task.cancel()
+    print("[TELEGRAM] Bot tasks stopped")
+
+
 app = FastAPI(
     title="LeadMaps API",
     description="Google Maps Business Data Extraction API with Authentication",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # Attach rate limiter to app

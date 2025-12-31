@@ -178,7 +178,9 @@ class AsyncGoogleMapsCrawler:
             return []
 
     async def scrape_place_details(self, place_url: Dict[str, str], use_new_page: bool = True) -> Optional[Dict[str, Any]]:
-        """Scrape detailed information from a place page"""
+        """Scrape detailed information from a place page using BeautifulSoup"""
+        from bs4 import BeautifulSoup
+        
         page = self.page
         if use_new_page:
             page = await self._get_new_page()
@@ -187,13 +189,20 @@ class AsyncGoogleMapsCrawler:
             url = place_url["url"]
             print(f"[→] Scraping: {place_url.get('name', 'Unknown')[:40]}...")
             
-            # Use domcontentloaded for speed
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # Navigate and wait for full load
+            await page.goto(url, wait_until="networkidle", timeout=30000)
             
-            # Minimal wait for core elements
+            # Wait for content to load properly
+            await asyncio.sleep(2)
+            
+            # Try to wait for key elements
             try:
                 await page.wait_for_selector("h1.DUwDvf", timeout=5000)
             except: pass
+            
+            # Get page HTML and parse with BeautifulSoup
+            html_content = await page.content()
+            soup = BeautifulSoup(html_content, 'html.parser')
             
             place_data = {
                 "name": "", "address": "", "phone": "", "website": "",
@@ -201,41 +210,117 @@ class AsyncGoogleMapsCrawler:
                 "source_url": url, "lat": None, "lng": None
             }
             
-            # Extract data
+            # Extract name
             try:
-                name_elem = page.locator("h1.DUwDvf").first
-                place_data["name"] = await name_elem.inner_text() if await name_elem.count() > 0 else place_url.get("name", "Unknown")
-            except: place_data["name"] = place_url.get("name", "Unknown")
+                name_elem = soup.find('h1', {'class': 'DUwDvf'})
+                if name_elem:
+                    place_data["name"] = name_elem.text.strip()
+                else:
+                    name_elem = soup.find('h1')
+                    if name_elem:
+                        place_data["name"] = name_elem.text.strip()
+            except:
+                pass
             
+            if not place_data["name"]:
+                place_data["name"] = place_url.get("name", "Unknown")
+            
+            # Extract phone number (like main.py)
             try:
-                phone_btn = page.locator("button[data-item-id='phone']")
-                if await phone_btn.count() > 0:
-                    text = await phone_btn.inner_text()
-                    nums = re.findall(r'[\d\s\+\(\)\-]+', text)
-                    if nums: place_data["phone"] = nums[0].strip()
+                # Primary: button with data-item-id='phone'
+                phone_elem = soup.find('button', {'data-item-id': 'phone'})
+                if phone_elem:
+                    phone_text = phone_elem.text.strip()
+                    phone_numbers = re.findall(r'[\d\s\+\(\)\-]+', phone_text)
+                    if phone_numbers:
+                        place_data["phone"] = phone_numbers[0].strip()
+                        print(f"[PHONE] Found via button[data-item-id='phone']: {place_data['phone']}")
+                
+                # Fallback selectors (from main.py)
+                if not place_data["phone"]:
+                    selectors = [
+                        ('button', {'data-item-id': lambda x: x and x.startswith('phone')}),
+                        ('a', {'data-item-id': lambda x: x and x.startswith('phone')}),
+                        ('a', {'href': lambda x: x and x.startswith('tel:')}),
+                    ]
+                    
+                    for tag, attrs in selectors:
+                        try:
+                            elem = soup.find(tag, attrs)
+                            if elem:
+                                # Check for tel: href
+                                href = elem.get('href', '')
+                                if href.startswith('tel:'):
+                                    place_data["phone"] = href.replace('tel:', '').strip()
+                                    print(f"[PHONE] Found via {tag}[href^='tel:']: {place_data['phone']}")
+                                    break
+                                # Get text
+                                phone_text = elem.text.strip()
+                                phone_numbers = re.findall(r'[\d\s\+\(\)\-]+', phone_text)
+                                if phone_numbers:
+                                    place_data["phone"] = phone_numbers[0].strip()
+                                    print(f"[PHONE] Found via {tag}: {place_data['phone']}")
+                                    break
+                        except:
+                            continue
+                
+                # CSS selector fallbacks
+                if not place_data["phone"]:
+                    css_selectors = [
+                        'div[data-tooltip*="Telepon"]',
+                        'div[data-tooltip*="phone"]',
+                        'button[aria-label*="Telepon"]',
+                        'button[aria-label*="phone"]',
+                    ]
+                    
+                    for selector in css_selectors:
+                        try:
+                            elem = soup.select_one(selector)
+                            if elem:
+                                phone_text = elem.text.strip()
+                                phone_numbers = re.findall(r'[\d\s\+\(\)\-]+', phone_text)
+                                if phone_numbers:
+                                    place_data["phone"] = phone_numbers[0].strip()
+                                    print(f"[PHONE] Found via CSS {selector}: {place_data['phone']}")
+                                    break
+                        except:
+                            continue
+                
+                if not place_data["phone"]:
+                    print(f"[PHONE] No phone found for {place_data['name']}")
+                    
+            except Exception as e:
+                print(f"[PHONE] Error: {e}")
+            
+            # Extract address
+            try:
+                addr_btn = soup.find('button', {'data-item-id': 'address'})
+                if addr_btn:
+                    place_data["address"] = addr_btn.text.strip()
             except: pass
             
+            # Extract rating
             try:
-                addr_btn = page.locator("button[data-item-id='address']")
-                if await addr_btn.count() > 0: place_data["address"] = await addr_btn.inner_text()
+                rating_elem = soup.select_one("div.F7nice span[aria-hidden='true']")
+                if rating_elem:
+                    place_data["rating"] = rating_elem.text.strip()
             except: pass
             
+            # Extract category
             try:
-                rating_elem = page.locator("div.F7nice span[aria-hidden='true']").first
-                if await rating_elem.count() > 0: place_data["rating"] = await rating_elem.inner_text()
-            except: pass
-
-            try:
-                category_btn = page.locator("button[jsaction*='category']").first
-                if await category_btn.count() > 0: place_data["category"] = await category_btn.inner_text()
+                category_btn = soup.select_one("button[jsaction*='category']")
+                if category_btn:
+                    place_data["category"] = category_btn.text.strip()
             except: pass
             
+            # Extract website
             try:
-                web_btn = page.locator("a[data-item-id='authority']").first
-                if await web_btn.count() > 0:
-                    place_data["website"] = await web_btn.get_attribute("href")
+                web_btn = soup.find('a', {'data-item-id': 'authority'})
+                if web_btn:
+                    place_data["website"] = web_btn.get('href', '')
             except: pass
             
+            # Extract coordinates from URL
             try:
                 curr_url = page.url
                 match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+)', curr_url)

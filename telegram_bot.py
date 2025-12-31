@@ -523,10 +523,22 @@ Consider blocking this IP.
     
     elif alert_type == "server_start":
         message = f"""
-🟢 <b>SERVER STARTED</b>
+🟢 <b>LeadMaps Server is Online!</b>
 
-<b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-<b>Status:</b> API is now running
+<b>⏰ Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+<b>📡 Status:</b> All systems running
+
+<b>🔧 Active Services:</b>
+  • API Server: ✅ Running
+  • Telegram Bot: ✅ Connected  
+  • Traffic Monitor: ✅ Active
+  • Auto Cleanup: ✅ Scheduled (12h)
+
+<b>🌐 Endpoints:</b>
+  • API: https://api.leadmaps.web.id
+  • Docs: /docs
+
+<i>Ready to extract leads! 🚀</i>
 """
     
     elif alert_type == "cache_cleanup":

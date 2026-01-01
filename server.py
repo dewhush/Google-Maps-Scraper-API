@@ -173,7 +173,11 @@ async def secure_middleware(request: Request, call_next):
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=403, 
-            content={"detail": f"Access Denied: Your IP has been temporarily blocked. Try again in {remaining} seconds."}
+            content={
+                "detail": f"Access Denied: Your IP has been temporarily blocked. Try again in {remaining} seconds.",
+                "code": "IP_BANNED",
+                "retry_after": remaining
+            }
         )
     
     # 1. Block large request bodies (prevent DoS) - 1MB limit for auth/api

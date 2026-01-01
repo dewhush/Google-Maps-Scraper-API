@@ -269,8 +269,19 @@ scraping_state = {
     "results_count": 0,
     "history_id": None,
     "started_at": None,
-    "error": None
+    "error": None,
+    "current": 0,
+    "success": 0,
+    "failed": 0
 }
+
+@app.get("/api/health")
+async def health_check(request: Request):
+    """
+    Lightweight health check endpoint.
+    Used by frontend to verify API connectivity and check for IP bans.
+    """
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 # OTP Storage (Persistent file-based storage)
 OTP_FILE = "otp_storage.json"

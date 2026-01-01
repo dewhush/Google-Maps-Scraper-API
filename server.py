@@ -44,6 +44,13 @@ from scraper_async import AsyncGoogleMapsCrawler
 # Telegram monitoring bot
 from telegram_bot import traffic_monitor, send_alert, telegram_webhook_handler, scheduled_cleanup, start_polling
 from contextlib import asynccontextmanager
+# Security module
+from security import (
+    sanitize_string, sanitize_html, validate_uuid, validate_query_string,
+    safe_path_join, validate_path_within_directory,
+    is_blocked_path, is_blocked_user_agent,
+    log_security_event, generate_error_id, SecurityError
+)
 
 # Rate Limiter setup
 limiter = Limiter(key_func=get_remote_address)
@@ -93,29 +100,54 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Global Exception Handler - Prevents info leakage
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch all unhandled exceptions and return sanitized error response"""
+    error_id = generate_error_id()
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Log the full error internally (not exposed to client)
+    log_security_event(
+        "UNHANDLED_ERROR", 
+        f"ID:{error_id} - {type(exc).__name__}: {str(exc)[:200]}", 
+        client_ip
+    )
+    print(f"❌ [ERROR {error_id}]: {type(exc).__name__}: {exc}")
+    
+    # Return sanitized error to client (no stack traces or internal details)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Please try again later.", "error_id": error_id}
+    )
+
 @app.middleware("http")
 async def secure_middleware(request: Request, call_next):
     client_ip = request.client.host if request.client else "unknown"
+    path = request.url.path.lower()
+    query = str(request.url.query).lower()
+    user_agent = request.headers.get("user-agent", "")
     
     # 1. Block large request bodies (prevent DoS) - 1MB limit for auth/api
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > 1 * 1024 * 1024:
         log_security_event("DOS_ATTEMPT", f"Large payload: {content_length} bytes", client_ip)
         return Response(status_code=413, content="Payload too large")
+    
+    # 2. Block header injection attempts
+    for header_name in request.headers.keys():
+        if "\n" in header_name or "\r" in header_name:
+            log_security_event("HEADER_INJECTION", f"Malformed header: {header_name[:50]}", client_ip)
+            return Response(status_code=400, content="Invalid request")
+    
+    # 3. Block known malicious scanners/bots (log only for legitimate tools)
+    if is_blocked_user_agent(user_agent):
+        log_security_event("BOT_SCAN", f"Blocked scanner: {user_agent[:100]}", client_ip)
+        # Don't block curl/python-requests as they may be legitimate, just log
 
-    # 2. Block malicious bot scanners & exploit attempts
-    path = request.url.path.lower()
-    query = str(request.url.query).lower()
-    
-    blocked_patterns = [
-        ".php", ".env", ".git", "xmlrpc", "wp-admin", 
-        "xdebug", "shell", "eval", "config", "backup",
-        "mysql", "setup", ".cgi", ".sh", ".sql", 
-        "node_modules", ".zip", ".rar", ".exe", ".bak",
-        "autodiscover", "powershell", "aspx", "jsp"
-    ]
-    
-    if any(pattern in path or pattern in query for pattern in blocked_patterns):
+    # 4. Block malicious bot scanners & exploit attempts (expanded patterns)
+    if is_blocked_path(path, query):
         log_security_event("BOT_SCAN", f"Attempted access to {path}", client_ip)
         print(f"🛑 [SECURITY BLOCK]: {client_ip} tried {path}")
         # Send Telegram alert for security block
@@ -126,18 +158,19 @@ async def secure_middleware(request: Request, call_next):
         }))
         return Response(status_code=403, content="Access Denied: Security Violation")
         
-    # 3. Process the request
+    # 5. Process the request
     response = await call_next(request)
     
-    # 4. Add High-End Security Headers
+    # 6. Add High-End Security Headers
     response.headers["X-Frame-Options"] = "DENY" 
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none';"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     
-    # 5. Log traffic to Telegram monitor
+    # 7. Log traffic to Telegram monitor
     try:
         should_alert = traffic_monitor.log_request(
             ip=client_ip,
@@ -152,13 +185,25 @@ async def secure_middleware(request: Request, call_next):
     
     return response
 
-# CORS configuration for production
+# CORS configuration - PRODUCTION RESTRICTED
+# Only allow requests from approved origins
+ALLOWED_ORIGINS = [
+    "https://www.leadmaps.web.id",
+    "https://leadmaps.web.id",
+    "http://localhost:3000",  # Local development
+    "http://localhost:5173",  # Vite dev server
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    expose_headers=["Content-Length", "Content-Type"],
+    max_age=600,  # Cache preflight for 10 minutes
 )
 
 # Gzip compression for large JSON responses (like contacts list)
@@ -560,10 +605,10 @@ async def register(request: Request, user_data: RegisterRequest):
     if stored_data["otp"] != user_data.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
-    # Create new user
+    # Create new user with sanitized input
     new_user_data = {
-        "name": user_data.name,
-        "email": user_data.email,
+        "name": sanitize_html(user_data.name, max_length=100),
+        "email": user_data.email,  # Already validated by Pydantic EmailStr
         "password_hash": pwd_context.hash(user_data.password),
         "created_at": datetime.utcnow().isoformat()
     }
@@ -964,17 +1009,18 @@ async def run_scraper(
                 try:
                     result = await active_crawler.scrape_place_details(place_url)
                     if result:
+                        # Sanitize scraped data to prevent stored XSS
                         new_contact = {
                             "user_id": user_id,
-                            "business_name": result.get("name", "Unknown"),
-                            "phone": result.get("phone", ""),
-                            "address": result.get("address", ""),
+                            "business_name": sanitize_html(result.get("name", "Unknown"), max_length=200),
+                            "phone": sanitize_string(result.get("phone", ""), max_length=50),
+                            "address": sanitize_html(result.get("address", ""), max_length=500),
                             "rating": float((result.get("rating") or "0").replace(",", ".")) if isinstance(result.get("rating"), str) else float(result.get("rating", 0) or 0),
                             "reviews": int(result.get("reviews", 0) or 0),
-                            "category": result.get("category", ""),
+                            "category": sanitize_html(result.get("category", ""), max_length=100),
                             "verified": False,
-                            "website": result.get("website", ""),
-                            "hours": result.get("hours", ""),
+                            "website": sanitize_string(result.get("website", ""), max_length=500),
+                            "hours": sanitize_html(result.get("hours", ""), max_length=500),
                             "description": "",
                             "raw_data": result
                         }
@@ -1315,9 +1361,13 @@ async def get_history(current_user: dict = Depends(get_current_user_token)):
 @app.get("/api/history/{history_id}", response_model=HistoryDetailResponse)
 async def get_history_detail(history_id: str, current_user: dict = Depends(get_current_user_token)):
     """Get details of a specific past extraction including contacts (protected)"""
+    # Validate history_id format to prevent injection
+    if not validate_uuid(history_id):
+        raise HTTPException(status_code=400, detail="Invalid history ID format")
+    
     user_id = current_user["id"]
     
-    # 1. Get history record
+    # 1. Get history record (ownership validated via user_id filter)
     history_resp = supabase.table("scrape_history").select("*").eq("id", history_id).eq("user_id", user_id).execute()
     if not history_resp.data:
         raise HTTPException(status_code=404, detail="History record not found")
@@ -1349,11 +1399,17 @@ async def get_history_detail(history_id: str, current_user: dict = Depends(get_c
 @app.delete("/api/history/{history_id}")
 async def delete_history(history_id: str, current_user: dict = Depends(get_current_user_token)):
     """Delete a past extraction record (protected)"""
+    # Validate history_id format
+    if not validate_uuid(history_id):
+        raise HTTPException(status_code=400, detail="Invalid history ID format")
+    
     user_id = current_user["id"]
     
-    # Check ownership
+    # Check ownership (IDOR protection)
     check_resp = supabase.table("scrape_history").select("id").eq("id", history_id).eq("user_id", user_id).execute()
     if not check_resp.data:
+        # Log potential IDOR attempt
+        log_security_event("IDOR_ATTEMPT", f"User {user_id} tried to delete history/{history_id}", "")
         raise HTTPException(status_code=404, detail="History record not found")
     
     supabase.table("scrape_history").delete().eq("id", history_id).execute()

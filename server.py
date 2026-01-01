@@ -162,9 +162,7 @@ async def secure_middleware(request: Request, call_next):
     query = str(request.url.query).lower()
     
     # DEBUG: Show Real IP vs Proxy (Uvicorn shows proxy, we need Real IP for banning)
-    if "health" in path: # Only log health checks if they are interesting or for debugging
-         pass # Reduce noise
-    else:
+    if True: # Always log for now to help user debug
          print(f"🔍 [TRAFFIC] Path: {path} | Real IP: {client_ip} | Connected via: {request.client.host if request.client else 'Unknown'}")
     # 0. Check if IP is auto-banned
     if ip_ban_tracker.is_banned(client_ip):

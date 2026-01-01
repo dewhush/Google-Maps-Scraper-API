@@ -160,13 +160,6 @@ async def secure_middleware(request: Request, call_next):
     client_ip = get_real_ip(request)
     path = request.url.path.lower()
     query = str(request.url.query).lower()
-    user_agent = request.headers.get("user-agent", "")
-    
-    # Allow health checks to bypass strict security blocks (prevents 400/403 on monitoring)
-    if path in ["/health", "/api/health"]:
-        return await call_next(request)
-    
-    # 0. Check if IP is auto-banned
     # 0. Check if IP is auto-banned
     if ip_ban_tracker.is_banned(client_ip):
         remaining = ip_ban_tracker.get_ban_remaining(client_ip)
@@ -179,6 +172,11 @@ async def secure_middleware(request: Request, call_next):
                 "retry_after": remaining
             }
         )
+
+    # Allow health checks to bypass strict security blocks (prevents 400/403 on monitoring)
+    # MUST be after ban check so banned users don't see "System Healthy"
+    if path in ["/health", "/api/health"]:
+        return await call_next(request)
     
     # 1. Block large request bodies (prevent DoS) - 1MB limit for auth/api
     content_length = request.headers.get("content-length")

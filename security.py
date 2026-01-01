@@ -452,7 +452,8 @@ class IPBanTracker:
             f"Auto-banned for {self.ban_duration}s: {reason}",
             ip
         )
-        print(f"🚫 [AUTO-BAN] IP {ip} banned for {self.ban_duration}s: {reason}")
+        action_type = "MANUAL-BAN" if "Manual" in reason else "AUTO-BAN"
+        print(f"🚫 [{action_type}] IP {ip} banned for {self.ban_duration}s: {reason}")
         self._save_bans()
     
     def unban_ip(self, ip: str) -> bool:

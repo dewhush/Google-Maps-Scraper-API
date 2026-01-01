@@ -55,6 +55,17 @@ from security import (
 
 # Rate Limiter setup
 # Rate Limiter setup
+def get_real_ip(request: Request) -> str:
+    """Get real IP address, handling Cloudflare and proxies"""
+    # Cloudflare Header
+    if request.headers.get("cf-connecting-ip"):
+        return request.headers.get("cf-connecting-ip")
+    # X-Forwarded-For (standard proxy)
+    if request.headers.get("x-forwarded-for"):
+        return request.headers.get("x-forwarded-for").split(",")[0].strip()
+    # Direct
+    return request.client.host if request.client else "unknown"
+
 # Rate Limiter setup - handler function
 def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     """
@@ -63,7 +74,7 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     2. Record it in IPBanTracker (strict limit)
     3. Return 429 error
     """
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_real_ip(request)
     
     # Record violation - if it hits threshold (1), it will ban
     # We use a distinct reason so we know it came from rate limiter
@@ -116,7 +127,7 @@ app = FastAPI(
 )
 
 # Initialize Rate Limiter
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_real_ip)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
@@ -146,7 +157,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def secure_middleware(request: Request, call_next):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = get_real_ip(request)
     path = request.url.path.lower()
     query = str(request.url.query).lower()
     user_agent = request.headers.get("user-agent", "")

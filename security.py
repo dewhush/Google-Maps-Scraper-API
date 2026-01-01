@@ -343,6 +343,9 @@ class IPBanTracker:
         self.violations: dict[str, list[float]] = {}
         # {ip: ban_expiry_timestamp}
         self.banned_ips: dict[str, float] = {}
+        
+        self.filename = "banned_ips.json"
+        self.last_load_time = 0.0
 
         # Load persisted bans
         self._load_bans()
@@ -350,22 +353,30 @@ class IPBanTracker:
     def _load_bans(self):
         """Load banned IPs from disk."""
         try:
-            if os.path.exists("banned_ips.json"):
-                with open("banned_ips.json", "r") as f:
-                    self.banned_ips = json.load(f)
+            if os.path.exists(self.filename):
+                mtime = os.path.getmtime(self.filename)
+                if mtime > self.last_load_time:
+                    with open(self.filename, "r") as f:
+                        self.banned_ips = json.load(f)
+                    self.last_load_time = mtime
         except Exception as e:
             print(f"Error loading bans: {e}")
 
     def _save_bans(self):
         """Save banned IPs to disk."""
         try:
-            with open("banned_ips.json", "w") as f:
+            with open(self.filename, "w") as f:
                 json.dump(self.banned_ips, f)
+            # Update last load time to avoid immediate reload
+            self.last_load_time = os.path.getmtime(self.filename)
         except Exception as e:
             print(f"Error saving bans: {e}")
     
     def is_banned(self, ip: str) -> bool:
         """Check if an IP is currently banned."""
+        # Check for external updates first
+        self._load_bans()
+        
         if ip not in self.banned_ips:
             return False
         
@@ -384,6 +395,9 @@ class IPBanTracker:
     
     def get_ban_remaining(self, ip: str) -> int:
         """Get remaining ban time in seconds."""
+        # Ensure fresh data
+        self._load_bans()
+        
         if ip not in self.banned_ips:
             return 0
         
@@ -426,6 +440,9 @@ class IPBanTracker:
     
     def _ban_ip(self, ip: str, reason: str = "") -> None:
         """Add IP to ban list."""
+        # Load latest bans first to avoid overwriting others
+        self._load_bans()
+        
         now = datetime.now().timestamp()
         self.banned_ips[ip] = now + self.ban_duration
         
@@ -440,6 +457,9 @@ class IPBanTracker:
     
     def unban_ip(self, ip: str) -> bool:
         """Manually unban an IP."""
+        # Reload first
+        self._load_bans()
+        
         if ip in self.banned_ips:
             del self.banned_ips[ip]
             self._save_bans()
@@ -450,6 +470,9 @@ class IPBanTracker:
     
     def get_banned_ips(self) -> list[dict]:
         """Get list of currently banned IPs with expiry times."""
+        # Ensure fresh data
+        self._load_bans()
+        
         now = datetime.now().timestamp()
         result = []
         
@@ -463,7 +486,12 @@ class IPBanTracker:
             else:
                 # Clean expired
                 del self.banned_ips[ip]
-                self._save_bans() # Clean up file too
+                # We defer save to end of loop or just let is_banned handle it lazily
+                # but cleaning here is good
+        
+        # If we removed anything, save
+        if len(result) != len(self.banned_ips):
+             self._save_bans()
         
         return result
     

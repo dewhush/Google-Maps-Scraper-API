@@ -317,6 +317,151 @@ def generate_error_id() -> str:
 
 
 # ==============================================================================
+# IP AUTO-BAN SYSTEM
+# ==============================================================================
+
+class IPBanTracker:
+    """
+    Automatic IP banning for malicious crawlers and attack attempts.
+    
+    Tracks violations per IP and bans after threshold is exceeded.
+    Bans expire after configurable duration.
+    """
+    
+    def __init__(
+        self, 
+        violation_threshold: int = 5,
+        ban_duration_seconds: int = 3600,  # 1 hour default
+        violation_window_seconds: int = 300  # 5 minute window
+    ):
+        self.threshold = violation_threshold
+        self.ban_duration = ban_duration_seconds
+        self.violation_window = violation_window_seconds
+        
+        # {ip: [timestamp, timestamp, ...]}
+        self.violations: dict[str, list[float]] = {}
+        # {ip: ban_expiry_timestamp}
+        self.banned_ips: dict[str, float] = {}
+    
+    def is_banned(self, ip: str) -> bool:
+        """Check if an IP is currently banned."""
+        if ip not in self.banned_ips:
+            return False
+        
+        expiry = self.banned_ips[ip]
+        now = datetime.now().timestamp()
+        
+        if now >= expiry:
+            # Ban expired, remove it
+            del self.banned_ips[ip]
+            if ip in self.violations:
+                del self.violations[ip]
+            return False
+        
+        return True
+    
+    def get_ban_remaining(self, ip: str) -> int:
+        """Get remaining ban time in seconds."""
+        if ip not in self.banned_ips:
+            return 0
+        
+        now = datetime.now().timestamp()
+        remaining = self.banned_ips[ip] - now
+        return max(0, int(remaining))
+    
+    def record_violation(self, ip: str, reason: str = "") -> bool:
+        """
+        Record a security violation for an IP.
+        
+        Args:
+            ip: Client IP address
+            reason: Violation reason for logging
+        
+        Returns:
+            True if IP is now banned, False otherwise
+        """
+        now = datetime.now().timestamp()
+        
+        # Initialize if new IP
+        if ip not in self.violations:
+            self.violations[ip] = []
+        
+        # Add this violation
+        self.violations[ip].append(now)
+        
+        # Clean old violations outside window
+        self.violations[ip] = [
+            t for t in self.violations[ip]
+            if now - t < self.violation_window
+        ]
+        
+        # Check if threshold exceeded
+        if len(self.violations[ip]) >= self.threshold:
+            self._ban_ip(ip, reason)
+            return True
+        
+        return False
+    
+    def _ban_ip(self, ip: str, reason: str = "") -> None:
+        """Add IP to ban list."""
+        now = datetime.now().timestamp()
+        self.banned_ips[ip] = now + self.ban_duration
+        
+        # Log the ban
+        log_security_event(
+            "IP_BANNED",
+            f"Auto-banned for {self.ban_duration}s: {reason}",
+            ip
+        )
+        print(f"🚫 [AUTO-BAN] IP {ip} banned for {self.ban_duration}s: {reason}")
+    
+    def unban_ip(self, ip: str) -> bool:
+        """Manually unban an IP."""
+        if ip in self.banned_ips:
+            del self.banned_ips[ip]
+            if ip in self.violations:
+                del self.violations[ip]
+            return True
+        return False
+    
+    def get_banned_ips(self) -> list[dict]:
+        """Get list of currently banned IPs with expiry times."""
+        now = datetime.now().timestamp()
+        result = []
+        
+        for ip, expiry in list(self.banned_ips.items()):
+            if now < expiry:
+                result.append({
+                    "ip": ip,
+                    "expires_in": int(expiry - now),
+                    "expires_at": datetime.fromtimestamp(expiry).isoformat()
+                })
+            else:
+                # Clean expired
+                del self.banned_ips[ip]
+        
+        return result
+    
+    def get_violation_count(self, ip: str) -> int:
+        """Get current violation count for an IP."""
+        if ip not in self.violations:
+            return 0
+        
+        now = datetime.now().timestamp()
+        recent = [t for t in self.violations[ip] if now - t < self.violation_window]
+        return len(recent)
+
+
+# Global IP ban tracker instance
+# Bans IMMEDIATELY on first violation, for 1 hour
+ip_ban_tracker = IPBanTracker(
+    violation_threshold=1,      # Ban on FIRST violation
+    ban_duration_seconds=3600,  # 1 hour ban
+    violation_window_seconds=300
+)
+
+
+# ==============================================================================
 # SECURITY LOGGING
 # ==============================================================================
 

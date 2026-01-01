@@ -479,6 +479,8 @@ Consider blocking this IP.
 """
     
     elif alert_type == "security_block":
+        auto_banned = data.get('auto_banned', False)
+        ban_msg = "\n\n🚫 <b>IP AUTO-BANNED FOR 1 HOUR!</b>" if auto_banned else ""
         message = f"""
 🛑 <b>SECURITY BLOCK</b>
 
@@ -487,7 +489,7 @@ Consider blocking this IP.
 <b>Query:</b> {data.get('query', '')[:50]}
 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-<i>Attacker/Bot scanner blocked</i>
+<i>Attacker/Bot scanner blocked</i>{ban_msg}
 """
     
     elif alert_type == "brute_force":

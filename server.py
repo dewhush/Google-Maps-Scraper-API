@@ -49,7 +49,8 @@ from security import (
     sanitize_string, sanitize_html, validate_uuid, validate_query_string,
     safe_path_join, validate_path_within_directory,
     is_blocked_path, is_blocked_user_agent,
-    log_security_event, generate_error_id, SecurityError
+    log_security_event, generate_error_id, SecurityError,
+    ip_ban_tracker  # Auto-ban system
 )
 
 # Rate Limiter setup
@@ -129,32 +130,47 @@ async def secure_middleware(request: Request, call_next):
     query = str(request.url.query).lower()
     user_agent = request.headers.get("user-agent", "")
     
+    # 0. Check if IP is auto-banned
+    if ip_ban_tracker.is_banned(client_ip):
+        remaining = ip_ban_tracker.get_ban_remaining(client_ip)
+        return Response(
+            status_code=403, 
+            content=f"Access Denied: Your IP has been temporarily blocked. Try again in {remaining} seconds."
+        )
+    
     # 1. Block large request bodies (prevent DoS) - 1MB limit for auth/api
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > 1 * 1024 * 1024:
         log_security_event("DOS_ATTEMPT", f"Large payload: {content_length} bytes", client_ip)
+        ip_ban_tracker.record_violation(client_ip, "Large payload DoS attempt")
         return Response(status_code=413, content="Payload too large")
     
     # 2. Block header injection attempts
     for header_name in request.headers.keys():
         if "\n" in header_name or "\r" in header_name:
             log_security_event("HEADER_INJECTION", f"Malformed header: {header_name[:50]}", client_ip)
+            ip_ban_tracker.record_violation(client_ip, "Header injection attempt")
             return Response(status_code=400, content="Invalid request")
     
-    # 3. Block known malicious scanners/bots (log only for legitimate tools)
+    # 3. Block known malicious scanners/bots
     if is_blocked_user_agent(user_agent):
         log_security_event("BOT_SCAN", f"Blocked scanner: {user_agent[:100]}", client_ip)
-        # Don't block curl/python-requests as they may be legitimate, just log
+        ip_ban_tracker.record_violation(client_ip, f"Malicious scanner: {user_agent[:50]}")
 
     # 4. Block malicious bot scanners & exploit attempts (expanded patterns)
     if is_blocked_path(path, query):
         log_security_event("BOT_SCAN", f"Attempted access to {path}", client_ip)
-        print(f"🛑 [SECURITY BLOCK]: {client_ip} tried {path}")
-        # Send Telegram alert for security block
+        print(f"\U0001F6D1 [SECURITY BLOCK]: {client_ip} tried {path}")
+        
+        # Record violation and check for auto-ban
+        was_banned = ip_ban_tracker.record_violation(client_ip, f"Malicious path: {path}")
+        
+        # Send Telegram alert for security block (include ban status)
         asyncio.create_task(send_alert("security_block", {
             "ip": client_ip,
             "path": path,
-            "query": query[:100] if query else ""
+            "query": query[:100] if query else "",
+            "auto_banned": was_banned
         }))
         return Response(status_code=403, content="Access Denied: Security Violation")
         

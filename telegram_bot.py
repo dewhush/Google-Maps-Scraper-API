@@ -562,6 +562,15 @@ Use these commands:
             response = "✅ No recent errors"
     
     # Quick Action Commands
+    elif text.startswith("/ban "):
+        ip = text.replace("/ban ", "").strip()
+        if ip_ban_tracker:
+            # Manually ban IP (use empty reason to indicate manual ban)
+            ip_ban_tracker._ban_ip(ip, "Manual ban via Telegram")
+            response = f"🚫 <b>IP Banned:</b> <code>{ip}</code> for 1 hour"
+        else:
+            response = "⚠️ IP ban tracker not available"
+
     elif text.startswith("/unban "):
         ip = text.replace("/unban ", "").strip()
         if ip_ban_tracker and ip_ban_tracker.unban_ip(ip):

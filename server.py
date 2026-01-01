@@ -162,6 +162,10 @@ async def secure_middleware(request: Request, call_next):
     query = str(request.url.query).lower()
     user_agent = request.headers.get("user-agent", "")
     
+    # Allow health checks to bypass strict security blocks (prevents 400/403 on monitoring)
+    if path in ["/health", "/api/health"]:
+        return await call_next(request)
+    
     # 0. Check if IP is auto-banned
     # 0. Check if IP is auto-banned
     if ip_ban_tracker.is_banned(client_ip):
@@ -280,6 +284,13 @@ async def health_check(request: Request):
     """
     Lightweight health check endpoint.
     Used by frontend to verify API connectivity and check for IP bans.
+    """
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+@app.get("/health", include_in_schema=False)
+async def root_health_check(request: Request):
+    """
+    Root health check for load balancers/monitors.
     """
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 

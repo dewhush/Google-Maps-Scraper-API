@@ -18,6 +18,12 @@ from typing import Optional
 import httpx
 from dotenv import load_dotenv
 
+# Import IP ban tracker from security module (will be available when server runs)
+try:
+    from security import ip_ban_tracker
+except ImportError:
+    ip_ban_tracker = None
+
 # Load env vars if running standalone
 load_dotenv()
 
@@ -244,8 +250,8 @@ def get_main_keyboard():
     return {
         "keyboard": [
             [{"text": "📊 Server Status"}, {"text": "📈 Traffic Stats"}],
-            [{"text": "🔒 Security Report"}, {"text": "🔄 Restart Server"}],
-            [{"text": "🕷️ Scraping Status"}, {"text": "🧹 Clean Cache"}],
+            [{"text": "🔒 Security Report"}, {"text": "🚫 Banned IPs"}],
+            [{"text": "🔄 Restart Server"}, {"text": "🧹 Clean Cache"}],
             [{"text": "📋 Recent Errors"}, {"text": "ℹ️ Help"}]
         ],
         "resize_keyboard": True,
@@ -304,17 +310,21 @@ async def get_traffic_stats() -> str:
 
 
 async def get_security_report() -> str:
-    """Get security report"""
+    """Get security report with banned IPs"""
     patterns = traffic_monitor.suspicious_patterns[-10:]
-    blocked = list(traffic_monitor.blocked_ips)[:10]
     
-    if not patterns and not blocked:
+    # Get banned IPs from ip_ban_tracker
+    banned_list = []
+    if ip_ban_tracker:
+        banned_list = ip_ban_tracker.get_banned_ips()
+    
+    if not patterns and not banned_list:
         return """
 <b>🔒 Security Report</b>
 
 ✅ No suspicious activity detected
-✅ No blocked IPs
-✅ All systems normal
+✅ No banned IPs
+✅ All systems secure
 """
     
     alerts = "\n".join([
@@ -322,7 +332,14 @@ async def get_security_report() -> str:
         for p in patterns[-5:]
     ]) or "  None"
     
-    blocked_list = "\n".join([f"  🚫 {ip}" for ip in blocked]) or "  None"
+    # Format banned IPs
+    if banned_list:
+        banned_str = "\n".join([
+            f"  🚫 {b['ip']} ({b['expires_in']}s left)"
+            for b in banned_list[:10]
+        ])
+    else:
+        banned_str = "  None"
     
     return f"""
 <b>🔒 Security Report</b>
@@ -330,10 +347,11 @@ async def get_security_report() -> str:
 <b>⚠️ Recent Alerts:</b>
 {alerts}
 
-<b>🚫 Blocked IPs:</b>
-{blocked_list}
+<b>🚫 Banned IPs ({len(banned_list)}):</b>
+{banned_str}
 
 <b>🔐 Failed Logins:</b> {sum(traffic_monitor.failed_logins.values())}
+<b>🛡️ Auto-Ban:</b> 1 violation = 1 hour ban
 """
 
 
@@ -413,8 +431,31 @@ async def handle_telegram_update(update: dict):
     elif text == "🔄 Restart Server":
         response = await restart_server()
     
-    elif text == "🕷️ Scraping Status":
-        response = await get_scraping_status()
+    elif text == "🚫 Banned IPs":
+        if ip_ban_tracker:
+            banned = ip_ban_tracker.get_banned_ips()
+            if banned:
+                banned_str = "\n".join([
+                    f"  🚫 <code>{b['ip']}</code>\n     ⏳ {b['expires_in'] // 60}m {b['expires_in'] % 60}s remaining"
+                    for b in banned[:15]
+                ])
+                response = f"""
+<b>🚫 Currently Banned IPs ({len(banned)})</b>
+
+{banned_str}
+
+<i>Bans expire after 1 hour</i>
+"""
+            else:
+                response = """
+<b>🚫 Banned IPs</b>
+
+✅ No IPs are currently banned
+
+<i>IPs get auto-banned for 1 hour on first malicious request</i>
+"""
+        else:
+            response = "⚠️ IP ban tracker not available"
     
     elif text == "🧹 Clean Cache":
         response = "<b>🧹 Cleaning Cache...</b>\n\nPlease wait..."

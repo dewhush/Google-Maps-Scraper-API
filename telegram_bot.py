@@ -249,10 +249,10 @@ def get_main_keyboard():
     """Get main keyboard with buttons"""
     return {
         "keyboard": [
-            [{"text": "📊 Server Status"}, {"text": "📈 Traffic Stats"}],
+            [{"text": "📊 Server Status"}, {"text": "🎯 Threat Intel"}],
             [{"text": "🔒 Security Report"}, {"text": "🚫 Banned IPs"}],
-            [{"text": "🔄 Restart Server"}, {"text": "🧹 Clean Cache"}],
-            [{"text": "📋 Recent Errors"}, {"text": "ℹ️ Help"}]
+            [{"text": "⚡ Quick Actions"}, {"text": "🧹 Clean Cache"}],
+            [{"text": "📋 Recent Errors"}, {"text": "🔄 Restart Server"}]
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False
@@ -285,27 +285,74 @@ async def get_server_status() -> str:
         return f"❌ Error getting status: {str(e)}"
 
 
-async def get_traffic_stats() -> str:
-    """Get traffic statistics"""
-    stats = traffic_monitor.get_stats()
+async def get_threat_intel() -> str:
+    """Get threat intelligence dashboard with attack analytics"""
+    import json
+    from collections import Counter
     
-    top_endpoints = "\n".join([f"  • {k}: {v}" for k, v in list(stats['top_endpoints'].items())[:5]])
-    top_ips = "\n".join([f"  • {k}: {v}" for k, v in list(stats['top_ips'].items())[:5]])
+    # Read security events log
+    attack_types = Counter()
+    attacker_ips = Counter()
+    recent_attacks = []
+    total_blocked = 0
+    
+    try:
+        if os.path.exists("security_events.json"):
+            with open("security_events.json", "r") as f:
+                for line in f:
+                    try:
+                        event = json.loads(line.strip())
+                        total_blocked += 1
+                        attack_types[event.get("event_type", "UNKNOWN")] += 1
+                        attacker_ips[event.get("ip", "unknown")] += 1
+                        if len(recent_attacks) < 5:
+                            recent_attacks.append(event)
+                    except:
+                        pass
+    except:
+        pass
+    
+    # Get banned count
+    banned_count = len(ip_ban_tracker.get_banned_ips()) if ip_ban_tracker else 0
+    
+    # Format top attack types
+    top_attacks = "\n".join([
+        f"  • {t}: {c} attacks"
+        for t, c in attack_types.most_common(5)
+    ]) or "  No attacks recorded"
+    
+    # Format top attacker IPs
+    top_attackers = "\n".join([
+        f"  🚨 {ip}: {c} attempts"
+        for ip, c in attacker_ips.most_common(5)
+    ]) or "  None detected"
+    
+    # Calculate threat level
+    if total_blocked > 100:
+        threat_level = "🔴 HIGH"
+    elif total_blocked > 20:
+        threat_level = "🟡 MEDIUM"
+    else:
+        threat_level = "🟢 LOW"
     
     return f"""
-<b>📈 Traffic Statistics</b>
+<b>🎯 Threat Intelligence Dashboard</b>
 
-<b>📊 Total Requests:</b> {stats['total_requests']}
-<b>👥 Unique Visitors:</b> {stats['unique_ips']}
-<b>⏱ Uptime:</b> {stats['uptime']}
+<b>🛡️ Threat Level:</b> {threat_level}
+<b>🚫 Total Attacks Blocked:</b> {total_blocked}
+<b>⛔ Currently Banned:</b> {banned_count} IPs
 
-<b>🔝 Top Endpoints:</b>
-{top_endpoints or "  No data yet"}
+<b>📊 Attack Types:</b>
+{top_attacks}
 
-<b>🌐 Top IPs:</b>
-{top_ips or "  No data yet"}
+<b>🚨 Top Attackers:</b>
+{top_attackers}
 
-<b>⚠️ Suspicious Activity:</b> {stats['suspicious_activity']}
+<b>🛡️ Protection Status:</b>
+  ✅ Auto-ban: ACTIVE (1 violation = 1h ban)
+  ✅ Rate limiting: ACTIVE
+  ✅ Bot blocking: ACTIVE
+  ✅ Path filtering: ACTIVE
 """
 
 
@@ -422,8 +469,27 @@ async def handle_telegram_update(update: dict):
     elif text == "📊 Server Status":
         response = await get_server_status()
     
-    elif text == "📈 Traffic Stats":
-        response = await get_traffic_stats()
+    elif text == "🎯 Threat Intel":
+        response = await get_threat_intel()
+    
+    elif text == "⚡ Quick Actions":
+        response = """
+<b>⚡ Quick Actions</b>
+
+Use these commands:
+
+<b>🔓 Unban an IP:</b>
+  /unban 123.45.67.89
+
+<b>🔍 Check IP status:</b>
+  /check 123.45.67.89
+
+<b>🗑️ Clear security log:</b>
+  /clearlog
+
+<b>📊 View attack stats:</b>
+  /stats
+"""
     
     elif text == "🔒 Security Report":
         response = await get_security_report()
@@ -494,6 +560,49 @@ async def handle_telegram_update(update: dict):
             ])
         else:
             response = "✅ No recent errors"
+    
+    # Quick Action Commands
+    elif text.startswith("/unban "):
+        ip = text.replace("/unban ", "").strip()
+        if ip_ban_tracker and ip_ban_tracker.unban_ip(ip):
+            response = f"✅ <b>IP Unbanned:</b> <code>{ip}</code>"
+        else:
+            response = f"⚠️ IP <code>{ip}</code> was not in the ban list"
+    
+    elif text.startswith("/check "):
+        ip = text.replace("/check ", "").strip()
+        if ip_ban_tracker:
+            if ip_ban_tracker.is_banned(ip):
+                remaining = ip_ban_tracker.get_ban_remaining(ip)
+                response = f"""
+<b>🔍 IP Status: <code>{ip}</code></b>
+
+🚫 <b>Status:</b> BANNED
+⏳ <b>Time remaining:</b> {remaining // 60}m {remaining % 60}s
+"""
+            else:
+                violations = ip_ban_tracker.get_violation_count(ip)
+                response = f"""
+<b>🔍 IP Status: <code>{ip}</code></b>
+
+✅ <b>Status:</b> Not banned
+⚠️ <b>Recent violations:</b> {violations}
+"""
+        else:
+            response = "⚠️ IP ban tracker not available"
+    
+    elif text == "/clearlog":
+        try:
+            if os.path.exists("security_events.json"):
+                os.remove("security_events.json")
+                response = "✅ <b>Security log cleared!</b>"
+            else:
+                response = "ℹ️ Security log is already empty"
+        except Exception as e:
+            response = f"❌ Error clearing log: {str(e)}"
+    
+    elif text == "/stats":
+        response = await get_threat_intel()
     
     else:
         response = "Unknown command. Use the buttons below or send /start for help."

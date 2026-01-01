@@ -17,6 +17,7 @@ import re
 import html
 import secrets
 from typing import Optional
+import json
 from datetime import datetime
 
 
@@ -342,6 +343,26 @@ class IPBanTracker:
         self.violations: dict[str, list[float]] = {}
         # {ip: ban_expiry_timestamp}
         self.banned_ips: dict[str, float] = {}
+
+        # Load persisted bans
+        self._load_bans()
+
+    def _load_bans(self):
+        """Load banned IPs from disk."""
+        try:
+            if os.path.exists("banned_ips.json"):
+                with open("banned_ips.json", "r") as f:
+                    self.banned_ips = json.load(f)
+        except Exception as e:
+            print(f"Error loading bans: {e}")
+
+    def _save_bans(self):
+        """Save banned IPs to disk."""
+        try:
+            with open("banned_ips.json", "w") as f:
+                json.dump(self.banned_ips, f)
+        except Exception as e:
+            print(f"Error saving bans: {e}")
     
     def is_banned(self, ip: str) -> bool:
         """Check if an IP is currently banned."""
@@ -354,6 +375,7 @@ class IPBanTracker:
         if now >= expiry:
             # Ban expired, remove it
             del self.banned_ips[ip]
+            self._save_bans()
             if ip in self.violations:
                 del self.violations[ip]
             return False
@@ -414,11 +436,13 @@ class IPBanTracker:
             ip
         )
         print(f"🚫 [AUTO-BAN] IP {ip} banned for {self.ban_duration}s: {reason}")
+        self._save_bans()
     
     def unban_ip(self, ip: str) -> bool:
         """Manually unban an IP."""
         if ip in self.banned_ips:
             del self.banned_ips[ip]
+            self._save_bans()
             if ip in self.violations:
                 del self.violations[ip]
             return True
@@ -439,6 +463,7 @@ class IPBanTracker:
             else:
                 # Clean expired
                 del self.banned_ips[ip]
+                self._save_bans() # Clean up file too
         
         return result
     

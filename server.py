@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Response, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
@@ -54,7 +54,25 @@ from security import (
 )
 
 # Rate Limiter setup
-limiter = Limiter(key_func=get_remote_address)
+# Rate Limiter setup
+# Rate Limiter setup - handler function
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    """
+    Handle rate limit exceeded events:
+    1. Log the violation
+    2. Record it in IPBanTracker (strict limit)
+    3. Return 429 error
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Record violation - if it hits threshold (1), it will ban
+    # We use a distinct reason so we know it came from rate limiter
+    ip_ban_tracker.record_violation(client_ip, f"Rate limit exceeded: {exc}")
+    
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please try again later."}
+    )
 
 # Password hashing (Using Argon2 by default, supports old sha256_crypt for migration)
 pwd_context = CryptContext(schemes=["argon2", "sha256_crypt"], deprecated="auto")
@@ -97,9 +115,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Attach rate limiter to app
+# Initialize Rate Limiter
+limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+
 
 # Global Exception Handler - Prevents info leakage
 @app.exception_handler(Exception)
@@ -131,11 +152,13 @@ async def secure_middleware(request: Request, call_next):
     user_agent = request.headers.get("user-agent", "")
     
     # 0. Check if IP is auto-banned
+    # 0. Check if IP is auto-banned
     if ip_ban_tracker.is_banned(client_ip):
         remaining = ip_ban_tracker.get_ban_remaining(client_ip)
-        return Response(
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
             status_code=403, 
-            content=f"Access Denied: Your IP has been temporarily blocked. Try again in {remaining} seconds."
+            content={"detail": f"Access Denied: Your IP has been temporarily blocked. Try again in {remaining} seconds."}
         )
     
     # 1. Block large request bodies (prevent DoS) - 1MB limit for auth/api

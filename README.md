@@ -1,5 +1,7 @@
 # 🗺️ Google Maps Scraper API
 
+![Author](https://img.shields.io/badge/Created_by-dewhush-blue?style=for-the-badge&logo=github)
+
 A lightweight REST API for extracting business leads from Google Maps using Playwright.
 
 ## 🚀 Quick Start

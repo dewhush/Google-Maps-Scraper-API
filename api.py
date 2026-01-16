@@ -299,6 +299,7 @@ if __name__ == "__main__":
     print(f"""
     ╔═══════════════════════════════════════════════════╗
     ║     GOOGLE MAPS SCRAPER API                       ║
+    ║     Created by: dewhush (GitHub)                  ║
     ╠═══════════════════════════════════════════════════╣
     ║  Local:  http://localhost:{port}                    ║
     ║  Docs:   http://localhost:{port}/docs               ║

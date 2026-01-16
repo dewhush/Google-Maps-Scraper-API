@@ -5,7 +5,7 @@ color 0A
 echo.
 echo  ╔═══════════════════════════════════════════════════╗
 echo  ║       GOOGLE MAPS SCRAPER API                     ║
-echo  ║       Lightweight Scraping Service                ║
+echo  ║       By: dewhush                                 ║
 echo  ╚═══════════════════════════════════════════════════╝
 echo.
 

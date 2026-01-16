@@ -358,7 +358,7 @@ def log_security_event(event_type: str, detail: str, ip: str = "Unknown"):
 otp_storage = load_otp_storage()
 
 # Email Configuration (Resend SDK)
-resend.api_key = os.getenv("RESEND_API_KEY") or os.getenv("MAIL_PASSWORD", "re_gigGS3mx_CX8pyx9utdRahVhVeFtJhGXn")
+resend.api_key = os.getenv("RESEND_API_KEY") or os.getenv("MAIL_PASSWORD", "")
 
 # Global crawler instance (async Playwright)
 active_crawler: Optional[AsyncGoogleMapsCrawler] = None

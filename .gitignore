@@ -1,14 +1,110 @@
+# ===========================================
+# Python
+# ===========================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
 venv/
 env/
+.venv/
+ENV/
+
+# ===========================================
+# Environment & Secrets
+# ===========================================
 .env
-.DS_Store
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Private Keys (NEVER COMMIT!)
+key_for_github
+key_for_github.pub
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# ===========================================
+# Sensitive Data Files
+# ===========================================
+users.json
+otp_storage.json
+security_events.json
+banned_ips.json
+*.secret
+credentials.json
+cookies.json
+
+# Data output files
+data_*.json
 *.json
 !requirements.json
 !package.json
-data_*.json
-users.json
+!package-lock.json
+
+# ===========================================
+# IDE & Editors
+# ===========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ===========================================
+# OS Generated
+# ===========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ===========================================
+# Logs & Cache
+# ===========================================
 *.log
+logs/
+*.cache
+.pytest_cache/
+.mypy_cache/
+
+# ===========================================
+# Browser Automation
+# ===========================================
 chrome_data/
+playwright-report/
+test-results/
+
+# ===========================================
+# Temporary Files
+# ===========================================
+*.tmp
+*.temp
+tmp/
+temp/

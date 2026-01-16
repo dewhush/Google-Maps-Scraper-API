@@ -1,8 +1,12 @@
 # 🗺️ Google Maps Scraper API
 
-![Author](https://img.shields.io/badge/Created_by-dewhush-blue?style=for-the-badge&logo=github)
+![Created by dewhush](https://img.shields.io/badge/Created%20by-dewhush-blue?style=for-the-badge&logo=github)
+![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green?style=for-the-badge&logo=fastapi)
 
 A lightweight REST API for extracting business leads from Google Maps using Playwright.
+
+---
 
 ## 🚀 Quick Start
 
@@ -16,8 +20,8 @@ playwright install chromium
 python api.py
 ```
 
-API: `http://localhost:8000`  
-Docs: `http://localhost:8000/docs`
+**API:** `http://localhost:8000`  
+**Swagger Docs:** `http://localhost:8000/docs`
 
 ---
 
@@ -25,12 +29,13 @@ Docs: `http://localhost:8000/docs`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/status` | Service health check |
-| `POST` | `/api/scrape` | Start scraping job |
-| `GET` | `/api/scrape/status` | Get scraping progress |
-| `POST` | `/api/scrape/stop` | Stop current scrape |
-| `GET` | `/api/results` | Get scraped results |
-| `DELETE` | `/api/results` | Clear stored results |
+| `GET` | `/health` | Simple health check |
+| `GET` | `/status` | Detailed service status |
+| `POST` | `/v1/scrape` | Start scraping job |
+| `GET` | `/v1/scrape/status` | Get scraping progress |
+| `POST` | `/v1/scrape/stop` | Stop current scrape |
+| `GET` | `/v1/results` | Get scraped results |
+| `DELETE` | `/v1/results` | Clear stored results |
 
 ---
 
@@ -39,40 +44,89 @@ Docs: `http://localhost:8000/docs`
 Set `API_KEY` in `.env`, then include in requests:
 
 ```bash
-# Header method
-curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/status
+# Header method (recommended)
+curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/status
 
 # Query parameter
-curl "http://localhost:8000/api/status?api_key=YOUR_KEY"
+curl "http://localhost:8000/status?api_key=YOUR_KEY"
 ```
 
-Leave `API_KEY` empty to disable authentication (dev only).
+> Leave `API_KEY` empty to disable authentication (dev only).
 
 ---
 
-## 📝 Example: Scraping
+## 📝 Usage Examples
 
 ### Start Scraping
+
 ```bash
-curl -X POST http://localhost:8000/api/scrape \
+curl -X POST http://localhost:8000/v1/scrape \
   -H "X-API-Key: YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "coffee shop jakarta",
-    "max_results": 20,
+    "keyword": "coffee shop",
+    "location": "jakarta",
+    "limit": 20,
     "phone_required": true,
     "min_rating": 4.0
   }'
 ```
 
+**Response:**
+```json
+{
+  "message": "Scraping started",
+  "query": "coffee shop jakarta",
+  "limit": 20
+}
+```
+
 ### Check Progress
+
 ```bash
-curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/scrape/status
+curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/v1/scrape/status
+```
+
+**Response:**
+```json
+{
+  "is_running": true,
+  "progress": 45,
+  "total": 100,
+  "status": "Scraped 5/10: Coffee Place...",
+  "current_query": "coffee shop jakarta",
+  "results_count": 5,
+  "started_at": "2026-01-17T01:00:00",
+  "error": null
+}
 ```
 
 ### Get Results
+
 ```bash
-curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/results
+curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/v1/results
+```
+
+**Response:**
+```json
+{
+  "total": 15,
+  "limit": 100,
+  "offset": 0,
+  "count": 15,
+  "data": [
+    {
+      "name": "Kopi Kenangan",
+      "phone": "628123456789",
+      "address": "Jl. Sudirman No. 1, Jakarta",
+      "website": "https://example.com",
+      "rating": "4.5",
+      "category": "Coffee shop",
+      "lat": -6.2088,
+      "lng": 106.8456
+    }
+  ]
+}
 ```
 
 ---
@@ -81,8 +135,9 @@ curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/results
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `query` | string | required | Search query (e.g., "coffee shop jakarta") |
-| `max_results` | int | 20 | Max businesses to scrape |
+| `keyword` | string | required | Search keyword (e.g., "coffee shop") |
+| `location` | string | optional | Location (e.g., "jakarta") |
+| `limit` | int | 20 | Max businesses to scrape |
 | `headless` | bool | true | Run browser in headless mode |
 | `phone_required` | bool | true | Skip results without phone |
 | `website_required` | bool | false | Skip results without website |
@@ -98,6 +153,7 @@ curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/results
 - Chrome/Chromium (auto-installed by Playwright)
 
 ### Setup
+
 ```bash
 # Create virtual environment
 python -m venv venv
@@ -121,12 +177,28 @@ python api.py
 ## 📦 Dependencies
 
 ```
-fastapi
-uvicorn
-python-dotenv
-playwright
-pydantic
-beautifulsoup4
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-dotenv>=1.0.0
+playwright>=1.40.0
+beautifulsoup4>=4.12.0
+pydantic>=2.0.0
+```
+
+---
+
+## 📁 Project Structure
+
+```
+.
+├── api.py              # FastAPI app & routes
+├── scraper_async.py    # Scraping logic (Playwright)
+├── requirements.txt
+├── .env.example
+├── .env                # Your local config (not in Git)
+├── run_api.bat
+├── .gitignore
+└── README.md
 ```
 
 ---
@@ -134,3 +206,7 @@ beautifulsoup4
 ## 📄 License
 
 Private and proprietary.
+
+---
+
+**Created by dewhush** 🚀

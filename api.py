@@ -2,12 +2,16 @@
 Google Maps Scraper API
 A lightweight FastAPI wrapper for Google Maps business data extraction.
 
+Created by: dewhush
+
 Endpoints:
-- GET  /api/status     - Service status
-- POST /api/scrape     - Start scraping
-- GET  /api/scrape/status - Get scraping progress
-- POST /api/scrape/stop   - Stop current scrape
-- GET  /api/results    - Get scraping results
+- GET  /health           - Simple health check
+- GET  /status           - Detailed service status
+- POST /v1/scrape        - Start scraping
+- GET  /v1/scrape/status - Get scraping progress
+- POST /v1/scrape/stop   - Stop current scrape
+- GET  /v1/results       - Get scraping results
+- DELETE /v1/results     - Clear results
 """
 
 import asyncio
@@ -40,13 +44,13 @@ API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 app = FastAPI(
     title="Google Maps Scraper API",
-    description="Extract business leads from Google Maps",
+    description="Extract business leads from Google Maps. Created by dewhush.",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-# CORS - Allow all origins for simplicity
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -54,6 +58,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===========================================
+# Startup Banner
+# ===========================================
+
+@app.on_event("startup")
+async def startup_event():
+    print("""
+    ╔═══════════════════════════════════════════════════╗
+    ║     GOOGLE MAPS SCRAPER API                       ║
+    ║     Created by: dewhush                           ║
+    ╠═══════════════════════════════════════════════════╣
+    ║  Docs:   http://localhost:8000/docs               ║
+    ╚═══════════════════════════════════════════════════╝
+    """)
 
 # ===========================================
 # Global State
@@ -78,8 +97,9 @@ active_crawler: Optional[AsyncGoogleMapsCrawler] = None
 # ===========================================
 
 class ScrapeRequest(BaseModel):
-    query: str
-    max_results: int = 20
+    keyword: str
+    location: Optional[str] = None
+    limit: int = 20
     headless: bool = True
     phone_required: bool = True
     website_required: bool = False
@@ -115,7 +135,6 @@ async def verify_api_key(
     key: Optional[str] = Query(None, alias="api_key")
 ) -> bool:
     """Verify API key from header or query parameter"""
-    # If no API_KEY configured, skip authentication
     if not API_KEY:
         return True
     
@@ -125,28 +144,49 @@ async def verify_api_key(
     return True
 
 # ===========================================
-# Endpoints
+# Health & Status Endpoints
 # ===========================================
 
-@app.get("/api/status")
+@app.get("/health")
+async def health_check():
+    """Simple health check endpoint"""
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/status")
 async def get_status():
-    """Service status and health check"""
+    """Detailed service status"""
     return {
         "status": "online",
         "service": "Google Maps Scraper API",
         "version": "1.0.0",
+        "author": "dewhush",
         "scraper_running": scraping_state["is_running"],
         "timestamp": datetime.utcnow().isoformat()
     }
 
+# ===========================================
+# Scraping Endpoints (v1)
+# ===========================================
 
-@app.post("/api/scrape", dependencies=[Depends(verify_api_key)])
+@app.post("/v1/scrape", dependencies=[Depends(verify_api_key)])
 async def start_scraping(request: ScrapeRequest, background_tasks: BackgroundTasks):
-    """Start a new scraping job"""
+    """
+    Start a new scraping job.
+    
+    - **keyword**: Search keyword (e.g., "coffee shop")
+    - **location**: Location to search (e.g., "jakarta")
+    - **limit**: Maximum results to collect
+    """
     global active_crawler, scraping_state, results_storage
     
     if scraping_state["is_running"]:
         raise HTTPException(status_code=409, detail="Scraping already in progress")
+    
+    # Build query from keyword + location
+    query = request.keyword
+    if request.location:
+        query = f"{request.keyword} {request.location}"
     
     # Reset state
     scraping_state.update({
@@ -154,7 +194,7 @@ async def start_scraping(request: ScrapeRequest, background_tasks: BackgroundTas
         "progress": 0,
         "total": 100,
         "status": "Starting...",
-        "current_query": request.query,
+        "current_query": query,
         "results_count": 0,
         "started_at": datetime.utcnow().isoformat(),
         "error": None
@@ -162,16 +202,16 @@ async def start_scraping(request: ScrapeRequest, background_tasks: BackgroundTas
     results_storage = []
     
     # Start scraping in background
-    background_tasks.add_task(run_scraper, request)
+    background_tasks.add_task(run_scraper, request, query)
     
     return {
         "message": "Scraping started",
-        "query": request.query,
-        "max_results": request.max_results
+        "query": query,
+        "limit": request.limit
     }
 
 
-async def run_scraper(request: ScrapeRequest):
+async def run_scraper(request: ScrapeRequest, query: str):
     """Background task to run the scraper"""
     global active_crawler, scraping_state, results_storage
     
@@ -203,8 +243,8 @@ async def run_scraper(request: ScrapeRequest):
         
         # Run crawl
         results = await active_crawler.crawl(
-            query=request.query,
-            max_results=request.max_results,
+            query=query,
+            max_results=request.limit,
             progress_callback=update_progress
         )
         
@@ -230,13 +270,13 @@ async def run_scraper(request: ScrapeRequest):
             active_crawler = None
 
 
-@app.get("/api/scrape/status", response_model=ScrapeStatus, dependencies=[Depends(verify_api_key)])
+@app.get("/v1/scrape/status", response_model=ScrapeStatus, dependencies=[Depends(verify_api_key)])
 async def get_scraping_status():
     """Get current scraping progress"""
     return ScrapeStatus(**scraping_state)
 
 
-@app.post("/api/scrape/stop", dependencies=[Depends(verify_api_key)])
+@app.post("/v1/scrape/stop", dependencies=[Depends(verify_api_key)])
 async def stop_scraping():
     """Stop the current scraping job"""
     global active_crawler, scraping_state
@@ -259,7 +299,7 @@ async def stop_scraping():
     return {"message": "Scraping stopped", "results_count": scraping_state["results_count"]}
 
 
-@app.get("/api/results", dependencies=[Depends(verify_api_key)])
+@app.get("/v1/results", dependencies=[Depends(verify_api_key)])
 async def get_results(
     limit: int = Query(100, description="Max results to return"),
     offset: int = Query(0, description="Offset for pagination")
@@ -279,7 +319,7 @@ async def get_results(
     }
 
 
-@app.delete("/api/results", dependencies=[Depends(verify_api_key)])
+@app.delete("/v1/results", dependencies=[Depends(verify_api_key)])
 async def clear_results():
     """Clear stored results"""
     global results_storage
@@ -299,7 +339,7 @@ if __name__ == "__main__":
     print(f"""
     ╔═══════════════════════════════════════════════════╗
     ║     GOOGLE MAPS SCRAPER API                       ║
-    ║     Created by: dewhush (GitHub)                  ║
+    ║     Created by: dewhush                           ║
     ╠═══════════════════════════════════════════════════╣
     ║  Local:  http://localhost:{port}                    ║
     ║  Docs:   http://localhost:{port}/docs               ║

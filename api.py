@@ -299,6 +299,158 @@ async def stop_scraping():
     return {"message": "Scraping stopped", "results_count": scraping_state["results_count"]}
 
 
+# ===========================================
+# Authentication (Mock/Compatibility)
+# ===========================================
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    otp: str
+
+@app.post("/auth/login")
+async def login(request: LoginRequest):
+    """Mock login endpoint"""
+    return {
+        "access_token": "mock_token_12345",
+        "token_type": "bearer",
+        "user": {
+            "id": "user_1",
+            "name": "Demo User",
+            "email": request.email
+        }
+    }
+
+@app.post("/auth/register")
+async def register(request: RegisterRequest):
+    """Mock register endpoint"""
+    return {
+        "access_token": "mock_token_12345",
+        "token_type": "bearer",
+        "user": {
+            "id": "user_1",
+            "name": request.name,
+            "email": request.email
+        }
+    }
+
+@app.get("/auth/me")
+async def get_me():
+    """Mock user info endpoint"""
+    return {
+        "id": "user_1",
+        "name": "Demo User",
+        "email": "demo@example.com"
+    }
+
+@app.post("/auth/send-otp")
+async def send_otp(request: Dict[str, str]):
+    return {"message": "OTP sent"}
+
+@app.post("/auth/verify-otp")
+async def verify_otp(request: Dict[str, str]):
+    return {"message": "OTP verified"}
+
+@app.post("/auth/forgot-password")
+async def forgot_password(request: Dict[str, str]):
+    return {"message": "Password reset email sent"}
+
+@app.post("/auth/reset-password")
+async def reset_password(request: Dict[str, str]):
+    return {"message": "Password reset successfully"}
+
+
+# ===========================================
+# Dashboard & Stats (Compatibility)
+# ===========================================
+
+@app.get("/dashboard/stats")
+async def get_dashboard_stats():
+    """Mock dashboard stats"""
+    global results_storage
+    return {
+        "total_leads": len(results_storage),
+        "this_month": len(results_storage),
+        "total_exports": 0,
+        "last_activity": datetime.now().isoformat()
+    }
+
+@app.get("/history")
+async def get_history():
+    """Mock history - currently mostly empty or static"""
+    return []
+
+@app.get("/history/{history_id}")
+async def get_history_details(history_id: str):
+    """Mock history details - returns current results for demo"""
+    global results_storage
+    return results_storage
+
+@app.delete("/history/{history_id}")
+async def delete_history(history_id: str):
+    return {"message": "History deleted"}
+
+
+# ===========================================
+# Frontend Compatibility Wrappers
+# ===========================================
+
+@app.get("/contacts")
+async def get_contacts_wrapper(history_id: Optional[str] = None):
+    """Wrapper for /v1/results to match frontend expectation"""
+    global results_storage
+    return {
+        "contacts": results_storage,
+        "total": len(results_storage)
+    }
+
+
+
+class FrontendScrapeRequest(BaseModel):
+    query: str
+    max_results: int = 50
+    headless: bool = True
+    phone_required: bool = True
+    website_required: bool = False
+    min_rating: float = 0.0
+    country_code: str = "ID"
+    min_reviews: int = 0
+    use_sub_areas: bool = False
+
+@app.post("/scrape")
+async def scrape_wrapper(request: FrontendScrapeRequest, background_tasks: BackgroundTasks):
+    """Corrected wrapper handling frontend field names"""
+    # Convert to backend expected format
+    backend_req = ScrapeRequest(
+        keyword=request.query, # Mapping query to keyword
+        location="",          # Frontend combines them usually
+        limit=request.max_results,
+        headless=request.headless,
+        phone_required=request.phone_required,
+        website_required=request.website_required,
+        min_rating=request.min_rating,
+        country_code=request.country_code
+    )
+    return await start_scraping(backend_req, background_tasks)
+
+
+@app.get("/scrape/status")
+async def scrape_status_wrapper():
+    """Wrapper for /v1/scrape/status"""
+    return await get_scraping_status()
+
+@app.post("/scrape/stop")
+async def scrape_stop_wrapper():
+    """Wrapper for /v1/scrape/stop"""
+    return await stop_scraping()
+
+# End of Compatibility Layer
+
 @app.get("/v1/results", dependencies=[Depends(verify_api_key)])
 async def get_results(
     limit: int = Query(100, description="Max results to return"),
